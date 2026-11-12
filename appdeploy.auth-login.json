@@ -1,0 +1,14 @@
+{
+  "methods": ["email"],
+  "headline": "Welcome to Danzo",
+  "subtitle": "Find it. Message the seller.",
+  "style": {
+    "mode": "light",
+    "accentColor": "#0F7B4F",
+    "backgroundColor": "#F7F8F5",
+    "panelColor": "#FFFFFF",
+    "textColor": "#14231B",
+    "fontFamily": "Inter, system-ui, sans-serif",
+    "borderRadius": 12
+  }
+}

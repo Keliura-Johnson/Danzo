@@ -1,0 +1,96 @@
+[
+  {
+    "name": "Browse a real marketplace with no seeded products",
+    "sanity": true,
+    "viewport": "mobile",
+    "covers": [
+      "only seller-created products appear",
+      "empty marketplace state",
+      "search and filters",
+      "mobile product cards"
+    ],
+    "description": "Verifies the public marketplace starts empty and only shows genuine approved seller listings.",
+    "steps": [
+      "Open the marketplace home page before any seller has published a listing",
+      "Open Search and view all categories",
+      "After a seller listing is approved, refresh the marketplace"
+    ],
+    "expected": "The initial marketplace shows the no-products message with no mock items; only the newly approved seller listing appears after approval."
+  },
+  {
+    "name": "Passwordless sign-in and protected buyer data",
+    "viewport": "desktop",
+    "covers": [
+      "email-link authentication",
+      "buyer profile creation",
+      "saved products access control",
+      "logout"
+    ],
+    "description": "Verifies a buyer can sign in by email link and protected account data is tied to the signed-in identity.",
+    "steps": [
+      "Create a buyer account using the email sign-in link",
+      "Open Profile and save a listing",
+      "Log out and attempt to open Saved items"
+    ],
+    "expected": "The buyer profile and saved products are available to the authenticated user and the session is cleared on logout."
+  },
+  {
+    "name": "Seller submits listing with calculated fee and receipt",
+    "viewport": "mobile",
+    "covers": [
+      "seller profile and Nigerian phone normalization",
+      "product price field",
+      "10 percent price-based fee calculation",
+      "Union Bank payment details",
+      "product photo compression and storage",
+      "receipt image upload and duplicate prevention",
+      "pending listing moderation"
+    ],
+    "description": "Verifies the seller sees the product price, exact 10 percent listing fee and configured bank details before submitting proof of payment.",
+    "steps": [
+      "Create a seller account with a Nigerian WhatsApp number",
+      "Open Sell and enter a product price of 20000 naira",
+      "Confirm the listing fee shows 2000 naira, then upload photos and a receipt and submit"
+    ],
+    "expected": "The listing is created as Pending, the fee is calculated as 10 percent of the intended price, and it remains hidden from public search until approval."
+  },
+  {
+    "name": "Admin receives submission alert and approves seller listing",
+    "viewport": "desktop",
+    "covers": [
+      "admin password secret protection",
+      "admin push notification subscription",
+      "new listing notification",
+      "approve listing",
+      "public visibility immediately after approval",
+      "seller approval notification",
+      "seller notification inbox"
+    ],
+    "description": "Verifies an admin who enabled alerts is notified of a new pending listing and approval publishes it and notifies the seller.",
+    "steps": [
+      "Sign in to a Danzo account, open /admin and unlock admin",
+      "Enable admin alerts on the device",
+      "As a separate seller account, submit a listing",
+      "Confirm the admin receives the new-listing notification and approves the pending listing",
+      "Open the public marketplace and the seller's My Listings updates"
+    ],
+    "expected": "The approved listing appears in public browsing immediately and the seller receives a verified/live notification in the app and by push when enabled."
+  },
+  {
+    "name": "Report listing and enforce seller ownership",
+    "viewport": "mobile",
+    "covers": [
+      "report submission and rate limit",
+      "seller-only listing edits and deletes",
+      "private seller contact details",
+      "buyer login requirement"
+    ],
+    "description": "Verifies buyer reports are recorded and private contact information is withheld from logged-out visitors.",
+    "steps": [
+      "Sign in as a buyer and submit a report",
+      "Open a product while logged out",
+      "Attempt to edit a listing owned by another account"
+    ],
+    "expected": "The report is queued for review, logged-out visitors see a login-to-contact prompt, and cross-account edits are denied."
+  }
+]

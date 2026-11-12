@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 150" role="img" aria-labelledby="title">
+  <title id="title">Danzo marketplace logo</title>
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f8a59"/><stop offset="1" stop-color="#075b3b"/></linearGradient></defs>
+  <rect x="8" y="8" width="134" height="134" rx="34" fill="url(#g)"/>
+  <path d="M43 61h64l-6 56H49z" fill="#fff"/>
+  <path d="M57 63c0-15 8-25 18-25s18 10 18 25" fill="none" stroke="#f5b83d" stroke-width="8" stroke-linecap="round"/>
+  <path d="M75 75v25" stroke="#0f7b4f" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="75" cy="111" r="5" fill="#f5b83d"/>
+  <text x="166" y="104" font-family="Inter,Arial,sans-serif" font-size="91" font-weight="800" letter-spacing="-5" fill="#0f7b4f">Danzo</text>
+  <circle cx="440" cy="99" r="8" fill="#f5a623"/>
+</svg>
