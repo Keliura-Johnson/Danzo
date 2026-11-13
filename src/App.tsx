@@ -149,6 +149,7 @@ function App() {
       price: '',
       description: '',
       location: 'Yola',
+      alternativePhone: '',
       negotiable: false,
       images: [],
       receipt: null,
@@ -356,6 +357,7 @@ function App() {
         price: '',
         description: '',
         location: profile?.location || 'Yola',
+        alternativePhone: '',
         negotiable: false,
         images: [],
         receipt: null,
@@ -437,8 +439,8 @@ function App() {
   const pick = async (e: any, field: string) => {
     const fs = Array.from(e.target.files || []) as File[];
     if (field === 'images') {
-      if (listing.images.length + fs.length > 4) {
-        notify('Maximum four photos.');
+      if (listing.images.length + fs.length > 2) {
+        notify('Exactly two product photos are required.');
         return;
       }
       if (fs.some(f => f.size > 5 * 1024 * 1024)) {
@@ -696,6 +698,10 @@ function App() {
                     onChange={e => setForm({ ...form, phone: e.target.value })}
                     placeholder="0803… or +234803…"
                   />
+                  <p className="notice">
+                    Please enter the phone number you actively use on WhatsApp.
+                    Buyers will use this number to contact you about your listings.
+                  </p>
                 </label>
                 <label>
                   Location
@@ -1005,13 +1011,25 @@ function App() {
                   </label>
                 </div>
                 <label>
+                  Alternative phone number (required)
+                  <input
+                    type="tel"
+                    value={listing.alternativePhone}
+                    onChange={e =>
+                      setListing({ ...listing, alternativePhone: e.target.value })
+                    }
+                    placeholder="A different number buyers can reach you on"
+                  />
+                  <p className="notice">
+                    Enter a valid Nigerian phone number different from the WhatsApp number on your profile. Buyers will use it as an alternative contact for this product.
+                  </p>
+                </label>
+                <label>
                   Description
                   <textarea
                     rows={4}
                     value={listing.description}
-                    onChange={e =>
-                      setListing({ ...listing, description: e.target.value })
-                    }
+                    onChange={e => setListing({ ...listing, description: e.target.value })}
                   />
                 </label>
                 <label className="agree">
@@ -1025,7 +1043,7 @@ function App() {
                   Negotiable
                 </label>
                 <label>
-                  Product photos (1–4, max 5MB each)
+                  Product photos (exactly 2, max 5MB each)
                   <input
                     type="file"
                     accept="image/*"
@@ -1084,7 +1102,8 @@ function App() {
                     !listing.title ||
                     !listing.price ||
                     !listing.description ||
-                    !listing.images.length ||
+                    !listing.alternativePhone ||
+                    listing.images.length !== 2 ||
                     !listing.receipt
                   }
                   onClick={submit}
@@ -1209,6 +1228,10 @@ function App() {
                           })
                         }
                       />
+                      <p className="notice">
+                        Please make sure this is the phone number you actively use
+                        on WhatsApp so buyers can reach you about your listings.
+                      </p>
                     </label>
                     <p className="notice">
                       Your name, location and WhatsApp number are visible to
@@ -1241,6 +1264,35 @@ function App() {
                 </button>
                 <button className="outline full" onClick={logout}>
                   Log out
+                </button>
+                <button
+                  className="outline full"
+                  disabled={loading}
+                  onClick={async () => {
+                    const confirmed = confirm(
+                      'Permanently delete your Danzo profile, listings, saved items and notifications? This does not delete your AppDeploy sign-in identity. This action cannot be undone.'
+                    );
+                    if (!confirmed) return;
+                    setLoading(true);
+                    try {
+                      await call('DELETE', '/api/account');
+                      try { await auth.signOut(); } catch { /* account data is already deleted */ }
+                      setUser(null);
+                      setProfile(null);
+                      setProfileEdit({});
+                      setMine([]);
+                      setSaved([]);
+                      setNotificationItems([]);
+                      nav('home');
+                      notify('Your Danzo profile and marketplace data have been deleted.');
+                    } catch (e: any) {
+                      notify(e.message);
+                    } finally {
+                      setLoading(false);
+                    }
+                  }}
+                >
+                  Delete Danzo account
                 </button>
               </>
             ) : (
