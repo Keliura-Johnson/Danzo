@@ -18,63 +18,96 @@
     "expected": "The initial marketplace shows the no-products message with no mock items; only the newly approved seller listing appears after approval."
   },
   {
-    "name": "Passwordless sign-in and protected buyer data",
+    "name": "Passwordless signup requires a profile name",
     "viewport": "desktop",
     "covers": [
       "email-link authentication",
+      "required full name",
       "buyer profile creation",
       "saved products access control",
       "logout"
     ],
-    "description": "Verifies a buyer can sign in by email link and protected account data is tied to the signed-in identity.",
+    "description": "Verifies the existing passwordless sign-in flow still requires a name for the Danzo profile.",
     "steps": [
-      "Create a buyer account using the email sign-in link",
-      "Open Profile and save a listing",
-      "Log out and attempt to open Saved items"
+      "Open Sign up and leave Full name empty",
+      "Confirm Continue with email is disabled",
+      "Enter a full name and complete email sign-in"
     ],
-    "expected": "The buyer profile and saved products are available to the authenticated user and the session is cleared on logout."
+    "expected": "A user cannot continue without a full name, and the saved name appears in Profile."
   },
   {
-    "name": "Seller submits listing with calculated fee and receipt",
+    "name": "Seller submits a listing with two photos and an alternative number",
     "viewport": "mobile",
     "covers": [
       "seller profile and Nigerian phone normalization",
-      "product price field",
+      "WhatsApp number reminder",
+      "two required product photos",
+      "alternative contact number validation",
       "10 percent price-based fee calculation",
-      "Union Bank payment details",
-      "product photo compression and storage",
-      "receipt image upload and duplicate prevention",
+      "payment receipt upload",
       "pending listing moderation"
     ],
-    "description": "Verifies the seller sees the product price, exact 10 percent listing fee and configured bank details before submitting proof of payment.",
+    "description": "Verifies sellers must submit two photos, a distinct alternative Nigerian number, and payment proof.",
     "steps": [
-      "Create a seller account with a Nigerian WhatsApp number",
+      "Create a seller profile with a WhatsApp number",
       "Open Sell and enter a product price of 20000 naira",
-      "Confirm the listing fee shows 2000 naira, then upload photos and a receipt and submit"
+      "Add one product photo and confirm submission is disabled",
+      "Add a second photo and enter a different valid Nigerian phone number",
+      "Upload the receipt and submit"
     ],
-    "expected": "The listing is created as Pending, the fee is calculated as 10 percent of the intended price, and it remains hidden from public search until approval."
+    "expected": "The listing is saved as Pending with two stored photos and the alternative contact number; it remains hidden from public search until approval."
   },
   {
-    "name": "Admin receives submission alert and approves seller listing",
+    "name": "Product cards show one photo and product details show both",
+    "viewport": "mobile",
+    "covers": [
+      "first product photo on listing card",
+      "second product photo hidden from cards",
+      "both photos visible on product detail page"
+    ],
+    "description": "Verifies the secondary photo is only returned and displayed after opening a listing.",
+    "steps": [
+      "Approve a listing containing two photos",
+      "View the listing card in the marketplace",
+      "Open the product detail page"
+    ],
+    "expected": "The card shows only the first photo; the detail page displays both photos."
+  },
+  {
+    "name": "Admin approves listing and buyer contacts the alternative number",
     "viewport": "desktop",
     "covers": [
       "admin password secret protection",
       "admin push notification subscription",
-      "new listing notification",
       "approve listing",
-      "public visibility immediately after approval",
-      "seller approval notification",
-      "seller notification inbox"
+      "public visibility after approval",
+      "alternative product contact number"
     ],
-    "description": "Verifies an admin who enabled alerts is notified of a new pending listing and approval publishes it and notifies the seller.",
+    "description": "Verifies product contact uses the listing's alternative phone number.",
     "steps": [
-      "Sign in to a Danzo account, open /admin and unlock admin",
-      "Enable admin alerts on the device",
-      "As a separate seller account, submit a listing",
-      "Confirm the admin receives the new-listing notification and approves the pending listing",
-      "Open the public marketplace and the seller's My Listings updates"
+      "Unlock Admin and approve a seller listing",
+      "Sign in as a buyer and open that product",
+      "Select Message on WhatsApp"
     ],
-    "expected": "The approved listing appears in public browsing immediately and the seller receives a verified/live notification in the app and by push when enabled."
+    "expected": "The WhatsApp link opens using the alternative phone number saved on that product."
+  },
+  {
+    "name": "Delete account removes Danzo profile and associated data",
+    "viewport": "mobile",
+    "covers": [
+      "account deletion confirmation",
+      "seller listings and uploaded photos deletion",
+      "saved items deletion",
+      "profile and notifications deletion",
+      "sign out after deletion"
+    ],
+    "description": "Verifies a confirmed account deletion removes the user's Danzo marketplace data and signs them out.",
+    "steps": [
+      "Sign in to an account that has a profile and at least one listing or saved item",
+      "Open Profile and select Delete Danzo account",
+      "Confirm the permanent deletion"
+    ],
+    "expected": "The profile, owned listings and their uploaded files, saved items, notifications and authored reports are deleted; the user is signed out. The AppDeploy identity itself remains available for future sign-in."
   },
   {
     "name": "Report listing and enforce seller ownership",
