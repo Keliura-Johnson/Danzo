@@ -18,22 +18,23 @@
     "expected": "The initial marketplace shows the no-products message with no mock items; only the newly approved seller listing appears after approval."
   },
   {
-    "name": "Passwordless signup requires a profile name",
+    "name": "Signup accepts a seller's manually entered location",
     "viewport": "desktop",
     "covers": [
-      "email-link authentication",
+      "Firebase email/password signup and login",
       "required full name",
+      "free-text seller location entry",
       "buyer profile creation",
       "saved products access control",
       "logout"
     ],
-    "description": "Verifies the existing passwordless sign-in flow still requires a name for the Danzo profile.",
+    "description": "Verifies signup requires a name and lets sellers type any city or town instead of choosing from a fixed location list.",
     "steps": [
       "Open Sign up and leave Full name empty",
       "Confirm Continue with email is disabled",
-      "Enter a full name and complete email sign-in"
+      "Enter a full name, email address and password, choose seller, type a city or town into Location, and create the Firebase account"
     ],
-    "expected": "A user cannot continue without a full name, and the saved name appears in Profile."
+    "expected": "A user cannot continue without a full name or a seller location; the typed location is saved to the new seller profile and appears in Profile."
   },
   {
     "name": "Seller submits a listing with two photos and an alternative number",
@@ -123,7 +124,7 @@
       "Delete the Danzo account and confirm the user is signed out",
       "Choose sign up, use the same email, enter a new name and complete sign-in"
     ],
-    "expected": "The user can create a new Danzo profile with the same email; the new profile starts without the previous listings, saved items or profile details."
+    "expected": "The user can create a new Firebase account with the same email after the previous Danzo profile is deleted; the new profile starts without the previous listings, saved items or profile details."
   },
   {
     "name": "Report listing and enforce seller ownership",
