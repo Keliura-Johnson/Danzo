@@ -33,11 +33,12 @@ async function profile(id: string) {
   const [p] = await db.get<any>('users', [id], { consistent: true });
   return p;
 }
-async function viewProduct(p: any) {
+async function viewProduct(p: any, includeAllImages = false) {
   const [s] = await db.get<any>('users', [p.sellerId]);
+  const visiblePaths = includeAllImages ? p.imagePaths : (p.imagePaths || []).slice(0, 1);
   return {
     ...p,
-    images: await signed(p.imagePaths),
+    images: await signed(visiblePaths),
     seller: {
       id: p.sellerId,
       name: s?.name || 'Danzo Demo Seller',
@@ -469,7 +470,7 @@ export const handler = router({
         [{ id: ctx.params.id, record: { views: (p.views || 0) + 1 } }],
         { patch: true }
       );
-      return json(await viewProduct(p));
+      return json(await viewProduct(p, true));
     },
   ],
   'GET /api/products/:id/contact': [
@@ -477,10 +478,11 @@ export const handler = router({
     async (ctx: any) => {
       const [p] = await db.get<any>('products', [ctx.params.id]);
       if (!p || p.status !== 'Live') return fail('Listing not found.', 404);
-      const s = await profile(p.sellerId);
-      if (!s || s.suspended || !validPhone(s.phone))
+      const s = await profile(p.sellerId),
+        contactPhone = p.alternativePhone || s?.phone;
+      if (!s || s.suspended || !validPhone(contactPhone))
         return fail('Seller contact is unavailable.', 404);
-      return json({ phone: s.phone });
+      return json({ phone: contactPhone });
     },
   ],
   'GET /api/me': [
@@ -540,6 +542,58 @@ export const handler = router({
       return json({ profile: next });
     },
   ],
+  'DELETE /api/account': [
+    requireAuth(),
+    async (ctx: any) => {
+      const userId = ctx.user!.userId;
+      const readAll = async (table: string) => {
+        const rows: any[] = [];
+        let nextToken: string | undefined;
+        do {
+          const page = await db.list<any>(table, {
+            limit: 100,
+            ...(nextToken ? { nextToken } : {}),
+          });
+          rows.push(...page.items);
+          nextToken = page.nextToken;
+        } while (nextToken);
+        return rows;
+      };
+      const allProducts = await readAll('products');
+      const ownedProducts = allProducts.filter((p: any) => p.sellerId === userId);
+      const productIds = new Set(ownedProducts.map((p: any) => p.id));
+      const [savedRows, notificationRows, reportRows, adminRows, receiptRows] = await Promise.all([
+        readAll('saved_items'),
+        readAll('user_notifications'),
+        readAll('reports'),
+        readAll('admin_notifications'),
+        readAll('receipt_hashes'),
+      ]);
+      const saved = savedRows.filter((r: any) => r.userId === userId || productIds.has(r.productId));
+      const userNotifications = notificationRows.filter((r: any) => r.userId === userId);
+      const reports = reportRows.filter((r: any) => r.userId === userId || productIds.has(r.productId));
+      const adminNotifications = adminRows.filter((r: any) => r.sellerId === userId || productIds.has(r.productId));
+      const receipts = receiptRows.filter((r: any) => productIds.has(r.listingId));
+      const paths = ownedProducts.flatMap((p: any) => [...(p.imagePaths || []), p.receiptPath].filter(Boolean));
+      if (paths.length) await storage.delete(paths);
+      const removeRows = async (table: string, rows: any[]) => {
+        const ids = rows.map((r: any) => r.id).filter(Boolean);
+        for (let i = 0; i < ids.length; i += 100) {
+          await db.delete(table, ids.slice(i, i + 100));
+        }
+      };
+      await Promise.all([
+        removeRows('products', ownedProducts),
+        removeRows('saved_items', saved),
+        removeRows('user_notifications', userNotifications),
+        removeRows('reports', reports),
+        removeRows('admin_notifications', adminNotifications),
+        removeRows('receipt_hashes', receipts),
+      ]);
+      await db.delete('users', [userId]);
+      return json({ ok: true, deletedProducts: ownedProducts.length });
+    },
+  ],
   'POST /api/products': [
     requireAuth(),
     async (ctx: any) => {
@@ -553,7 +607,10 @@ export const handler = router({
         desc = clean(b.description, 3000),
         price = Number(b.price),
         category = clean(b.category, 80),
-        imgs = Array.isArray(b.images) ? b.images.slice(0, 4) : [];
+        altPhone = phone(clean(b.alternativePhone, 30)),
+        imgs = Array.isArray(b.images) ? b.images.slice(0, 2) : [];
+      if (!validPhone(altPhone) || altPhone === s.phone)
+        return fail('Enter a valid alternative Nigerian phone number different from your profile WhatsApp number.');
       if (
         !title ||
         !desc ||
@@ -562,8 +619,8 @@ export const handler = router({
         !C.CATEGORIES.includes(category as any)
       )
         return fail('Check title, category, price and description.');
-      if (!imgs.length || !b.receipt)
-        return fail('Add product photos and a payment receipt.');
+      if (imgs.length !== 2 || !b.receipt)
+        return fail('Add exactly two product photos and a payment receipt.');
       const receiptData = clean(b.receipt.data, 6800000);
       if (!receiptData) return fail('Receipt image is required.');
       const receiptHash = sha(receiptData),
@@ -596,6 +653,7 @@ export const handler = router({
               ? b.condition
               : 'Used - Good',
             location: clean(b.location || s.location, 120),
+            alternativePhone: altPhone,
             negotiable: !!b.negotiable,
             imagePaths: paths,
             receiptPath,
