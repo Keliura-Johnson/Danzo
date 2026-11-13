@@ -110,6 +110,22 @@
     "expected": "The profile, owned listings and their uploaded files, saved items, notifications and authored reports are deleted; the user is signed out. The AppDeploy identity itself remains available for future sign-in."
   },
   {
+    "name": "Create a fresh Danzo profile after account deletion",
+    "viewport": "mobile",
+    "covers": [
+      "same-email re-registration after Danzo data deletion",
+      "fresh profile creation under retained AppDeploy identity",
+      "signup form reset after deletion"
+    ],
+    "description": "Verifies a user can return after deleting Danzo data and create a new marketplace profile using the same email identity.",
+    "steps": [
+      "Sign in and create a Danzo profile using an email address",
+      "Delete the Danzo account and confirm the user is signed out",
+      "Choose sign up, use the same email, enter a new name and complete sign-in"
+    ],
+    "expected": "The user can create a new Danzo profile with the same email; the new profile starts without the previous listings, saved items or profile details."
+  },
+  {
     "name": "Report listing and enforce seller ownership",
     "viewport": "mobile",
     "covers": [
