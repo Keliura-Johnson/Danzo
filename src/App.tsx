@@ -1270,23 +1270,42 @@ function App() {
                   disabled={loading}
                   onClick={async () => {
                     const confirmed = confirm(
-                      'Permanently delete your Danzo profile, listings, saved items and notifications? This does not delete your AppDeploy sign-in identity. This action cannot be undone.'
+                      'Delete your Danzo account permanently? This removes your Danzo profile, listings and uploaded files, saved items, notifications, and reports. Your AppDeploy sign-in identity is not deleted, so you can use the same email to create a fresh Danzo profile later. This cannot be undone.'
                     );
                     if (!confirmed) return;
                     setLoading(true);
+                    let danzoDataDeleted = false;
                     try {
                       await call('DELETE', '/api/account');
-                      try { await auth.signOut(); } catch { /* account data is already deleted */ }
+                      danzoDataDeleted = true;
+                      await auth.signOut();
+                      sessionStorage.removeItem('danzo_signup');
                       setUser(null);
                       setProfile(null);
                       setProfileEdit({});
                       setMine([]);
                       setSaved([]);
                       setNotificationItems([]);
-                      nav('home');
-                      notify('Your Danzo profile and marketplace data have been deleted.');
+                      setForm({
+                        name: '',
+                        email: user?.email || form.email || '',
+                        role: 'buyer',
+                        phone: '',
+                        location: 'Yola',
+                        area: '',
+                        bio: '',
+                        terms: false,
+                      });
+                      nav('signup');
+                      notify('Your Danzo data has been deleted. Sign up again with the same email to start fresh.');
                     } catch (e: any) {
-                      notify(e.message);
+                      if (danzoDataDeleted) {
+                        setProfile(null);
+                        setProfileEdit({});
+                        notify('Your Danzo data was deleted, but sign-out did not finish. Please use Log out before signing up again.');
+                      } else {
+                        notify(e.message);
+                      }
                     } finally {
                       setLoading(false);
                     }
