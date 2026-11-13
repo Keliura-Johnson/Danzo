@@ -108,14 +108,14 @@
       "Open Profile and select Delete Danzo account",
       "Confirm the permanent deletion"
     ],
-    "expected": "The profile, owned listings and their uploaded files, saved items, notifications and authored reports are deleted; the user is signed out. The AppDeploy identity itself remains available for future sign-in."
+    "expected": "The profile, owned listings and their uploaded files, saved items, notifications and authored reports are deleted; the Firebase Authentication account is also deleted and the user is signed out."
   },
   {
     "name": "Create a fresh Danzo profile after account deletion",
     "viewport": "mobile",
     "covers": [
       "same-email re-registration after Danzo data deletion",
-      "fresh profile creation under retained AppDeploy identity",
+      "fresh Firebase account and Danzo profile creation using the same email",
       "signup form reset after deletion"
     ],
     "description": "Verifies a user can return after deleting Danzo data and create a new marketplace profile using the same email identity.",
@@ -124,7 +124,7 @@
       "Delete the Danzo account and confirm the user is signed out",
       "Choose sign up, use the same email, enter a new name and complete sign-in"
     ],
-    "expected": "The user can create a new Firebase account with the same email after the previous Danzo profile is deleted; the new profile starts without the previous listings, saved items or profile details."
+    "expected": "The user can register a new Firebase Authentication account with the same email after deletion; the new profile starts without the previous listings, saved items or profile details."
   },
   {
     "name": "Report listing and enforce seller ownership",
