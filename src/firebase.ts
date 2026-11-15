@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 
 const firebaseApp = initializeApp({
-  apiKey: 'AIzaSyA58HMW_lNdfK6CSLiJxzQJ3ndii7NY6yk',
+  apiKey: 'AIzaSyDlDQ1soF-0Fx9ENPWFR3DdQVJatStlm0Q',
   authDomain: 'danzo-23b81.firebaseapp.com',
   projectId: 'danzo-23b81',
   storageBucket: 'danzo-23b81.firebasestorage.app',

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { api } from '@appdeploy/client';
 import { firebaseAuth } from './firebase';
-import { createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signOut as firebaseSignOut } from 'firebase/auth';
+import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
 import {
   Search,
   Menu,
@@ -25,6 +26,9 @@ import {
   CheckCircle2,
   Trash2,
   Eye,
+  EyeOff,
+  Phone,
+  Mail,
   Settings,
   LayoutDashboard,
 } from 'lucide-react';
@@ -87,21 +91,21 @@ const compress = (f: File) =>
 const call = async (m: string, p: string, d?: any) => {
   try {
     const token = await firebaseAuth.currentUser?.getIdToken();
-    const response = await fetch(p, {
-      method: m,
-      headers: {
-        ...(token ? { Authorization: 'Bearer ' + token } : {}),
-        ...(d ? { 'Content-Type': 'application/json' } : {}),
-      },
-      ...(d ? { body: JSON.stringify(d) } : {}),
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(result?.message || result?.error || 'Something went wrong.');
+    const payload = token ? { ...(d || {}), __firebaseToken: token } : d;
+    let response: { data: any };
+    if (m === 'GET') {
+      response = await api.get(p, { params: token ? { __firebaseToken: token } : d });
+    } else if (m === 'POST') {
+      response = await api.post(p, payload);
+    } else if (m === 'PUT') {
+      response = await api.put(p, payload);
+    } else {
+      response = await api.delete(p, token ? { __firebaseToken: token } : d);
     }
-    return result;
+    return response.data;
   } catch (e: any) {
-    throw new Error(e?.message || 'Something went wrong.');
+    const message = e?.response?.data?.message || e?.response?.data?.error || e?.message;
+    throw new Error(message || 'Something went wrong. Please try again.');
   }
 };
 function App() {
@@ -124,6 +128,9 @@ function App() {
     [toast, setToast] = useState(''),
     [products, setProducts] = useState<Product[]>([]),
     [mine, setMine] = useState<Product[]>([]),
+    [payments, setPayments] = useState<any[]>([]),
+    [paymentDraftId, setPaymentDraftId] = useState(''),
+    [paymentDraftAmount, setPaymentDraftAmount] = useState(0),
     [saved, setSaved] = useState<any[]>([]),
     [notificationItems, setNotificationItems] = useState<any[]>([]),
     [selected, setSelected] = useState<Product | null>(null),
@@ -166,6 +173,7 @@ function App() {
     [profileEdit, setProfileEdit] = useState<any>({}),
     [authReady, setAuthReady] = useState(false);
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const notify = (s: string) => {
     setToast(s);
     window.setTimeout(() => setToast(''), 3000);
@@ -195,6 +203,8 @@ function App() {
         if (m.profile.role === 'seller') {
           const l = await call('GET', '/api/my-products');
           setMine(l.items || []);
+          const paymentData = await call('GET', '/api/payments/mine');
+          setPayments(paymentData.items || []);
         }
       }
     } catch (e: any) {
@@ -237,6 +247,21 @@ function App() {
   useEffect(() => {
     if (user && profile) privateLoad();
   }, [user, profile?.role]);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get('reference');
+    if (params.get('paystack') === 'callback' && reference) {
+      call('GET', '/api/paystack/callback?reference=' + encodeURIComponent(reference))
+        .then(result => {
+          notify(result.paymentStatus === 'paid'
+            ? 'Payment received. Waiting for admin verification.'
+            : 'Paystack has not confirmed this payment yet. You can check again in My Listings.');
+          setPage('my');
+        })
+        .catch((e: any) => notify(e.message))
+        .finally(() => history.replaceState({}, '', '/'));
+    }
+  }, []);
 
   useEffect(() => {
     if (page === 'home' || page === 'search') load();
@@ -273,24 +298,137 @@ function App() {
     else if (location.pathname === '/admin') history.pushState({}, '', '/');
   };
   const login = async () => {
+    setLoading(true);
     try {
       sessionStorage.setItem('danzo_signup', JSON.stringify(form));
-      await createUserWithEmailAndPassword(firebaseAuth, form.email.trim(), password);
+      const email = form.email.trim().toLowerCase();
+      const current = firebaseAuth.currentUser;
+      if (current && current.email?.toLowerCase() === email) {
+        const existing = await call('GET', '/api/me');
+        if (!existing.profile) {
+          const created = await call('POST', '/api/profile', {
+            ...form,
+            location: form.location + (form.area ? ', ' + form.area : ''),
+          });
+          setProfile(created.profile);
+        } else {
+          setProfile(existing.profile);
+        }
+        sessionStorage.removeItem('danzo_signup');
+        setPassword('');
+        nav('home');
+        notify('Your Danzo account is ready.');
+        return;
+      }
+      await createUserWithEmailAndPassword(firebaseAuth, email, password);
+      const created = await call('POST', '/api/profile', {
+        ...form,
+        location: form.location + (form.area ? ', ' + form.area : ''),
+      });
+      setUser(firebaseAuth.currentUser);
+      setProfile(created.profile);
+      sessionStorage.removeItem('danzo_signup');
       setPassword('');
+      nav('home');
+      notify('Your Danzo account is ready.');
     } catch (e: any) {
       notify(e.code === 'auth/email-already-in-use'
-        ? 'This email already has an account. Please log in instead.'
-        : e.message);
+        ? 'This email already has an account. Log in, then return here to finish setting up your Danzo profile.'
+        : e.message || 'Account setup failed. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
   const passwordLogin = async () => {
+    setLoading(true);
     try {
-      await signInWithEmailAndPassword(firebaseAuth, form.email.trim(), password);
+      const credential = await signInWithEmailAndPassword(firebaseAuth, form.email.trim().toLowerCase(), password);
+      const existing = await call('GET', '/api/me');
+      let activeProfile = existing.profile;
+      if (!activeProfile) {
+        const draftText = sessionStorage.getItem('danzo_signup');
+        if (!draftText) {
+          setForm(prev => ({
+            ...prev,
+            email: credential.user.email || prev.email,
+            name: '',
+            role: 'buyer',
+            phone: '',
+            location: '',
+            area: '',
+            bio: '',
+            terms: false,
+          }));
+          nav('signup');
+          notify('Your login is valid. Complete your Danzo profile to continue.');
+          return;
+        }
+        const draft = JSON.parse(draftText);
+        const created = await call('POST', '/api/profile', {
+          ...draft,
+          location: draft.location + (draft.area ? ', ' + draft.area : ''),
+        });
+        activeProfile = created.profile;
+        sessionStorage.removeItem('danzo_signup');
+      }
+      setUser(credential.user);
+      setProfile(activeProfile);
       setPassword('');
+      nav('home');
+      notify('Welcome back.');
     } catch (e: any) {
-      notify(e.code === 'auth/invalid-credential'
+      notify(e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password'
         ? 'Email or password is incorrect.'
-        : e.message);
+        : e.message || 'Login failed. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const googleSignIn = async (source: 'login' | 'signup') => {
+    if (source === 'signup' && !form.terms) {
+      notify('Please agree to the Terms and Privacy Policy first.');
+      return;
+    }
+    if (form.role === 'seller' && (!form.phone.trim() || !form.location.trim())) {
+      notify('Sellers must enter their WhatsApp number and location first.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const credential = await signInWithPopup(firebaseAuth, provider);
+      const existing = await call('GET', '/api/me');
+      let activeProfile = existing.profile;
+      if (!activeProfile) {
+        const details = {
+          name: credential.user.displayName || form.name || credential.user.email?.split('@')[0] || 'Danzo user',
+          email: credential.user.email || '',
+          role: form.role === 'seller' ? 'seller' : 'buyer',
+          phone: form.role === 'seller' ? form.phone : '',
+          location: form.location || '',
+          area: form.area || '',
+          bio: form.bio || '',
+        };
+        const created = await call('POST', '/api/profile', details);
+        activeProfile = created.profile;
+      }
+      setUser(credential.user);
+      setProfile(activeProfile);
+      setProfileEdit(activeProfile);
+      setPassword('');
+      sessionStorage.removeItem('danzo_signup');
+      nav('home');
+      notify(existing.profile ? 'Welcome back to Danzo.' : 'Your Danzo account is ready.');
+    } catch (e: any) {
+      const message = e.code === 'auth/account-exists-with-different-credential'
+        ? 'This email already uses another sign-in method. Log in with that method first.'
+        : e.code === 'auth/popup-closed-by-user'
+          ? 'Google sign-in was cancelled.'
+          : e.message || 'Google sign-in failed. Please try again.';
+      notify(message);
+    } finally {
+      setLoading(false);
     }
   };
   const resetPassword = async () => {
@@ -322,24 +460,31 @@ function App() {
       notify(e.message);
     }
   };
-  const contact = async () => {
+  const contact = async (method: 'whatsapp' | 'sms' | 'call' = 'whatsapp') => {
     if (!user) {
       nav('login');
       return;
     }
     try {
       const d = await call('GET', '/api/products/' + selected?.id + '/contact');
-      const msg =
-        'Hello, I saw "' +
-        selected?.title +
-        '" (' +
-        money(selected?.price || 0) +
-        ') on Danzo. Is it still available?';
-      window.open(
-        'https://wa.me/' + phone(d.phone) + '?text=' + encodeURIComponent(msg),
-        '_blank',
-        'noopener,noreferrer'
-      );
+      const number = phone(d.phone);
+      if (method === 'call') {
+        window.location.href = 'tel:+' + number;
+      } else if (method === 'sms') {
+        window.location.href = 'sms:+' + number;
+      } else {
+        const msg =
+          'Hello, I saw "' +
+          selected?.title +
+          '" (' +
+          money(selected?.price || 0) +
+          ') on Danzo. Is it still available?';
+        window.open(
+          'https://wa.me/' + number + '?text=' + encodeURIComponent(msg),
+          '_blank',
+          'noopener,noreferrer'
+        );
+      }
     } catch (e: any) {
       notify(e.message);
     }
@@ -361,34 +506,52 @@ function App() {
   const submit = async () => {
     setLoading(true);
     try {
-      const imgs = await Promise.all(listing.images.map(compress)),
-        receipt = await compress(listing.receipt);
-      await call('POST', '/api/products', {
-        ...listing,
-        price: Number(listing.price),
-        images: imgs,
-        receipt,
-      });
-      notify('Listing submitted for approval.');
-      setListing({
-        title: '',
-        category: 'Phones & Tablets',
-        condition: 'Used - Good',
-        price: '',
-        description: '',
-        location: profile?.location || 'Yola',
-        alternativePhone: '',
-        negotiable: false,
-        images: [],
-        receipt: null,
-      });
+      const imgs = await Promise.all(listing.images.map(compress));
+      const result = await call('POST', '/api/listing-drafts', { ...listing, price: Number(listing.price), images: imgs });
+      if (result.needsPayment) {
+        setPaymentDraftId(result.listingId);
+        setPaymentDraftAmount(Math.ceil(Number(listing.price) * DANZO_CONFIG.PER_LISTING_PERCENT / 100));
+        notify('Your product draft is saved. Choose a payment option.');
+      } else {
+        notify(result.message || 'Listing submitted for approval.');
+        setListing({ title: '', category: 'Phones & Tablets', condition: 'Used - Good', price: '', description: '', location: profile?.location || 'Yola', alternativePhone: '', negotiable: false, images: [], receipt: null });
+        nav('my');
+        await privateLoad();
+      }
+    } catch (e: any) { notify(e.message); }
+    finally { setLoading(false); }
+  };
+  const startListingPayment = async (planType: string) => {
+    if (!paymentDraftId) return;
+    setLoading(true);
+    try {
+      const result = await call('POST', '/api/payments/initialize', { listingId: paymentDraftId, planType });
+      if (!result.authorizationUrl) throw new Error('Paystack did not return a checkout link.');
+      window.location.assign(result.authorizationUrl);
+    } catch (e: any) { notify(e.message); setLoading(false); }
+  };
+  const requestListingWaiver = async () => {
+    if (!paymentDraftId) return;
+    const accepted = confirm('Waivers are not given to everyone. Requests are reviewed by the admin and may be declined. Continue?');
+    if (!accepted) return;
+    setLoading(true);
+    try {
+      await call('POST', '/api/payments/waiver', { listingId: paymentDraftId });
+      setPaymentDraftId('');
+      setListing({ title: '', category: 'Phones & Tablets', condition: 'Used - Good', price: '', description: '', location: profile?.location || 'Yola', alternativePhone: '', negotiable: false, images: [], receipt: null });
+      notify('Waiver request pending.');
       nav('my');
       await privateLoad();
-    } catch (e: any) {
-      notify(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { notify(e.message); }
+    finally { setLoading(false); }
+  };
+  const verifyMyPayment = async (reference: string) => {
+    try {
+      const result = await call('POST', '/api/payments/verify', { reference });
+      notify(result.message);
+      const data = await call('GET', '/api/payments/mine');
+      setPayments(data.items || []);
+    } catch (e: any) { notify(e.message); }
   };
   const loadAdmin = async (tab = adminTab, token = adminToken) => {
     try {
@@ -396,9 +559,10 @@ function App() {
         tab === 'dashboard'
           ? '/api/admin/dashboard'
           : tab === 'settings'
-            ? '/api/admin/settings'
+            ? '/api/admin/settings'          : tab === 'payments'
+            ? '/api/admin/payments'
             : tab === 'reports'
-              ? '/api/admin/reports'
+            ? '/api/admin/reports'
               : tab === 'users'
                 ? '/api/admin/users'
                 : '/api/admin/products';
@@ -537,6 +701,15 @@ function App() {
           </div>
         )}
       </header>
+      {user && page !== 'admin' && (
+        <nav className="desktop-nav" aria-label="Main navigation">
+          <button className={page === 'home' ? 'active' : ''} onClick={() => nav('home')}><Home size={17} /> Home</button>
+          <button className={page === 'search' ? 'active' : ''} onClick={() => nav('search')}><Search size={17} /> Search</button>
+          {profile?.role === 'seller' && <button className={page === 'sell' ? 'active' : ''} onClick={() => nav('sell')}><Plus size={17} /> Sell</button>}
+          <button className={page === 'saved' ? 'active' : ''} onClick={() => nav('saved')}><Bookmark size={17} /> Saved</button>
+          <button className={page === 'profile' ? 'active' : ''} onClick={() => nav('profile')}><User size={17} /> Profile</button>
+        </nav>
+      )}
       <main>
         {page === 'home' && (
           <>
@@ -672,34 +845,21 @@ function App() {
           <section className="panel">
             <small>JOIN DANZO</small>
             <h1>Create your account</h1>
-            <p>Create an account with your email address and a password.</p>
+            <p>Create an account with your email address and a password, or use Google.</p>
             <label>
               Full name
-              <input
-                value={form.name}
-                onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder="Your full name"
-              />
+              <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Your full name" />
             </label>
             <label>
               Email address
-              <input
-                type="email"
-                value={form.email}
-                onChange={e => setForm({ ...form, email: e.target.value })}
-                placeholder="you@example.com"
-              />
+              <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" />
             </label>
             <label>
               Password
-              <input
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="At least 6 characters"
-                minLength={6}
-                autoComplete="new-password"
-              />
+              <div className="password-input">
+                <input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" minLength={6} autoComplete="new-password" />
+                <button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={19} /> : <Eye size={19} />}</button>
+              </div>
             </label>
             <b>What would you like to do?</b>
             <div className="roles">
@@ -744,12 +904,8 @@ function App() {
                   />
                 </label>
                 <label>
-                  Area / hostel
-                  <input
-                    value={form.area}
-                    onChange={e => setForm({ ...form, area: e.target.value })}
-                    placeholder="Area or hostel"
-                  />
+                  Area
+                  <input value={form.area} onChange={e => setForm({ ...form, area: e.target.value })} placeholder="Enter your area" />
                 </label>
                 <label>
                   Short bio (optional)
@@ -772,23 +928,17 @@ function App() {
               />{' '}
               I agree to the Terms and Privacy Policy.
             </label>
-            <button
-              className="primary full"
-              disabled={
-                !form.name ||
-                !form.email ||
-                password.length < 6 ||
-                !form.terms ||
-                (form.role === 'seller' && (!form.phone || !form.location.trim()))
-              }
-              onClick={login}
-            >
-              Create account
+            <button className="outline full google-signin" disabled={loading || !form.terms || (form.role === 'seller' && (!form.phone.trim() || !form.location.trim()))} onClick={() => googleSignIn('signup')}>
+              <span className="google-mark" aria-hidden="true">G</span> {loading ? 'Connecting…' : 'Continue with Google'}
+            </button>
+            <p className="muted center auth-divider">or continue with email</p>
+            <button className="primary full" disabled={loading || !form.name || !form.email || password.length < 6 || !form.terms || (form.role === 'seller' && (!form.phone.trim() || !form.location.trim()))} onClick={login}>
+              {loading ? 'Creating account…' : 'Create account'}
             </button>
             <p className="muted center">
               Already have an account?{' '}
               <button className="link" onClick={() => nav('login')}>
-                Log in
+                Continue to login
               </button>
             </p>
           </section>
@@ -797,35 +947,23 @@ function App() {
           <section className="panel">
             <small>WELCOME BACK</small>
             <h1>Log in to Danzo</h1>
-            <p>Log in using your email address and password.</p>
+            <p>Log in using your email address and password, or continue with Google.</p>
             <label>
               Email address
-              <input
-                type="email"
-                value={form.email}
-                onChange={e => setForm({ ...form, email: e.target.value })}
-                placeholder="you@example.com"
-              />
+              <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" />
             </label>
             <label>
               Password
-              <input
-                type="password"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="Your password"
-                autoComplete="current-password"
-              />
+              <div className="password-input">
+                <input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Your password" autoComplete="current-password" />
+                <button type="button" className="password-toggle" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={19} /> : <Eye size={19} />}</button>
+              </div>
             </label>
-            <button
-              className="primary full"
-              disabled={!form.email || !password}
-              onClick={passwordLogin}
-            >
-              Log in
-            </button>
-            <button className="link" onClick={resetPassword}>
-              Forgot password?
+            <button className="primary full" disabled={loading || !form.email || !password} onClick={passwordLogin}>{loading ? 'Logging in…' : 'Log in'}</button>
+            <button className="link" onClick={resetPassword}>Forgot password?</button>
+            <p className="muted center auth-divider">or continue with Google</p>
+            <button className="outline full google-signin" disabled={loading} onClick={() => googleSignIn('login')}>
+              <span className="google-mark" aria-hidden="true">G</span> {loading ? 'Connecting…' : 'Continue with Google'}
             </button>
             <p className="muted center">
               New here?{' '}
@@ -938,9 +1076,11 @@ function App() {
                   </small>
                 </div>
                 {user ? (
-                  <button className="whatsapp full" onClick={contact}>
-                    <MessageCircle /> Message on WhatsApp
-                  </button>
+                  <div className="contact-actions">
+                    <button className="whatsapp full" onClick={() => contact('whatsapp')}><MessageCircle /> Message on WhatsApp</button>
+                    <button className="outline" onClick={() => contact('sms')}><MessageCircle size={17} /> Send SMS</button>
+                    <button className="outline" onClick={() => contact('call')}><Phone size={17} /> Call seller</button>
+                  </div>
                 ) : (
                   <button className="primary full" onClick={() => nav('login')}>
                     Log in to contact seller
@@ -1077,15 +1217,17 @@ function App() {
                   />{' '}
                   Negotiable
                 </label>
-                <label>
-                  Product photos (exactly 2, max 5MB each)
-                  <input
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    onChange={e => pick(e, 'images')}
-                  />
-                </label>
+                <div className="photo-upload-options">
+                  <label className="upload-choice">
+                    <span>Choose from files or gallery</span>
+                    <input className="file-picker-hidden" type="file" accept="image/*" multiple onChange={e => pick(e, 'images')} />
+                  </label>
+                  <label className="upload-choice">
+                    <span><Camera size={18} /> Take a photo now</span>
+                    <input className="file-picker-hidden" type="file" accept="image/*" capture="environment" onChange={e => pick(e, 'images')} />
+                  </label>
+                  <small>{listing.images.length} of 2 photos selected. {listing.images.length === 2 ? 'Both photos are ready.' : 'Select or take the remaining photo(s).'} Maximum 5MB per photo.</small>
+                </div>
                 <div className="thumbs">
                   {listing.images.map((f: File, i: number) => (
                     <span>
@@ -1105,28 +1247,18 @@ function App() {
                     </span>
                   ))}
                 </div>
-                <div className="payment">
-                  <small>STEP 2 · PAYMENT</small>
-                  <h2>Listing fee ({cfg.listingFeePercent || 10}%): {money(Math.ceil((Number(listing.price) || 0) * (cfg.listingFeePercent || 10) / 100))}</h2>
-                  <p className="muted">The listing fee is 10% of your intended product price.</p>
-                  <p>Bank: <b>{cfg.bankName}</b></p>
-                  <p>Account number: <b>{cfg.bankAccountNumber || 'Add account number in Admin Settings'}</b>{' '}{cfg.bankAccountNumber && <button className="link" onClick={() => { navigator.clipboard.writeText(cfg.bankAccountNumber); notify('Copied.'); }}><Copy size={14} /> Copy</button>}</p>
-                  <p>Account name: <b>{cfg.bankAccountName || 'Add account name in Admin Settings'}</b></p>
-                  <ol>
-                    <li>Transfer the exact amount.</li>
-                    <li>Take a screenshot of the receipt.</li>
-                    <li>Upload it below.</li>
-                  </ol>
-                  <label>
-                    Payment receipt (required)
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={e => pick(e, 'receipt')}
-                    />
-                  </label>
-                  {listing.receipt && <small>{listing.receipt.name}</small>}
-                </div>
+                {profile?.planApprovalStatus === 'approved' && Number(profile.planExpiresAt) > Date.now() && <p className="notice">Your plan is active until {new Date(profile.planExpiresAt).toLocaleDateString('en-NG')}.</p>}
+                {profile?.planApprovalStatus === 'pending' && <p className="notice">Your plan payment is pending admin verification. New listings will be held until approval.</p>}
+                {paymentDraftId && <div className="payment panel">
+                  <small>CHOOSE YOUR LISTING PAYMENT</small>
+                  <h2>Your product draft is saved</h2>
+                  <p>Choose one option. Payments are processed securely by Paystack.</p>
+                  <button className="outline full" disabled={loading} onClick={() => startListingPayment('month')}>Pay for 1 month: ₦{Number(DANZO_CONFIG.MONTH_PRICE).toLocaleString('en-NG')} · Unlimited listings for 31 days</button>
+                  <button className="outline full" disabled={loading} onClick={() => startListingPayment('sixmonth')}>Pay for 6 months: ₦{Number(DANZO_CONFIG.SIXMONTH_PRICE).toLocaleString('en-NG')} · Unlimited listings for 183 days</button>
+                  <button className="outline full" disabled={loading} onClick={() => startListingPayment('listing')}>Pay for just this listing: ₦{(paymentDraftAmount || Math.ceil(Number(listing.price) * DANZO_CONFIG.PER_LISTING_PERCENT / 100)).toLocaleString('en-NG')}</button>
+                  <button className="outline full" disabled={loading} onClick={requestListingWaiver}>Request a waiver</button>
+                  <button className="link" onClick={() => setPaymentDraftId('')}>Cancel and keep draft</button>
+                </div>}
                 <p className="muted">
                   Buyers will contact you on {profile.phone}.
                 </p>
@@ -1138,12 +1270,11 @@ function App() {
                     !listing.price ||
                     !listing.description ||
                     !listing.alternativePhone ||
-                    listing.images.length !== 2 ||
-                    !listing.receipt
+                    listing.images.length !== 2
                   }
                   onClick={submit}
                 >
-                  {loading ? 'Submitting…' : 'Submit for approval'}
+                  {loading ? 'Saving draft…' : 'Continue'}
                 </button>
               </>
             )}
@@ -1153,6 +1284,7 @@ function App() {
           <section className="section">
             <small>SELLER SPACE</small>
             <h1>My listings</h1>
+            {payments.map((payment: any) => <article className="my-item payment-record" key={payment.reference}><div><b>{payment.planType === 'month' ? '1-month plan' : payment.planType === 'sixmonth' ? '6-month plan' : payment.planType === 'waiver' ? 'Waiver request' : 'Single listing fee'}</b><small>{payment.paymentStatus === 'paid' ? 'Payment received. Waiting for admin verification.' : payment.paymentStatus === 'pending' ? 'Payment pending' : payment.paymentStatus === 'waiver_requested' ? 'Waiver request pending' : payment.paymentStatus === 'rejected' || payment.paymentStatus === 'waiver_declined' ? 'Rejected: ' + (payment.rejectionReason || 'Please contact Danzo.') : payment.paymentStatus}</small><small>{payment.reference} · {payment.amount ? money(payment.amount) : 'No payment'}</small></div><div>{payment.paymentStatus === 'pending' && <><button className="outline" onClick={() => payment.authorizationUrl && window.location.assign(payment.authorizationUrl)}>Continue payment</button><button className="outline" onClick={() => verifyMyPayment(payment.reference)}>I've paid, check now</button></>}{(payment.paymentStatus === 'rejected' || payment.paymentStatus === 'waiver_declined') && <button className="outline" onClick={() => { setPaymentDraftId(payment.listingId); setPaymentDraftAmount(Number(payment.amount) || 0); nav('sell'); }}>Choose payment options again</button>}</div></article>)}
             <div className="notification-tools"><div><b>Listing notifications</b><small>Get an alert when your product is approved or needs changes.</small></div><button className="outline" onClick={enableSellerAlerts}>Enable alerts</button></div>
             {notificationItems.length > 0 && <div className="seller-notifications"><b>Recent updates</b>{notificationItems.map((n: any) => <div className="seller-notice" key={n.id}><strong>{n.title}</strong><small>{n.body}</small></div>)}</div>}
             <div className="my-list">
@@ -1252,6 +1384,10 @@ function App() {
                 </label>
                 {profile.role === 'seller' && (
                   <>
+                    <label>
+                      Area
+                      <input value={profileEdit.area || ''} onChange={e => setProfileEdit({ ...profileEdit, area: e.target.value })} placeholder="Enter your area" />
+                    </label>
                     <label>
                       WhatsApp phone
                       <input
@@ -1396,6 +1532,7 @@ function App() {
                   {[
                     'dashboard',
                     'products',
+                    'payments',
                     'reports',
                     'users',
                     'settings',
@@ -1429,9 +1566,11 @@ function App() {
                             {p.isDemo ? 'DEMO · ' : ''}
                             {p.title}
                           </b>
-                          <small>
-                            {money(p.price)} · {p.location} · {p.status}
-                          </small>
+                          <small>{money(p.price)} · {p.location} · {p.status}</small>
+                          <small><b>Product owner:</b> {p.sellerFullName || 'Unknown seller'}</small>
+                          <small><b>Owner email:</b> {p.sellerEmail || 'Not provided'}</small>
+                          <small><b>Owner phone:</b> {p.sellerPhone || 'Not provided'}</small>
+                          {p.sellerArea && <small><b>Area:</b> {p.sellerArea}</small>}
                           {p.receiptUrl && (
                             <a href={p.receiptUrl} target="_blank">
                               View receipt image
@@ -1473,6 +1612,10 @@ function App() {
                         </div>
                       </article>
                     ))}
+                  </div>
+                ) : adminTab === 'payments' ? (
+                  <div className="my-list">
+                    {(adminData.items || []).map((p: any) => <article className="my-item" key={p.reference}><div><b>{p.ownerName} · {p.productTitle}</b><small>{p.ownerEmail} · {p.planType} · {p.amount ? money(p.amount) : '₦0'}</small><small>{p.paymentStatus === 'paid' ? 'Paid ✅ verified by Paystack' : p.paymentStatus === 'waiver_requested' ? 'Waiver requested' : p.paymentStatus} · {p.approvalStatus}</small><small>Reference: {p.reference}</small><small>{new Date(p.createdAt).toLocaleString('en-NG')}</small>{p.rejectionReason && <small className="danger">{p.rejectionReason}</small>}</div><div>{p.paymentStatus === 'paid' && p.approvalStatus === 'pending' && <><button className="outline" onClick={async () => { await adminCall('POST', '/api/admin/payments/' + encodeURIComponent(p.reference) + '/recheck'); loadAdmin('payments'); }}>Re-check with Paystack</button><button className="outline" onClick={async () => { await adminCall('POST', '/api/admin/payments/' + encodeURIComponent(p.reference) + '/action', { action: 'approve' }); loadAdmin('payments'); }}>Approve</button><button className="outline" onClick={async () => { const reason = prompt('Reason for rejection:') || ''; if (!reason) return; await adminCall('POST', '/api/admin/payments/' + encodeURIComponent(p.reference) + '/action', { action: 'reject', reason }); loadAdmin('payments'); }}>Reject</button></>}{p.planType === 'waiver' && p.approvalStatus === 'pending' && <><button className="outline" onClick={async () => { await adminCall('POST', '/api/admin/payments/' + encodeURIComponent(p.reference) + '/action', { action: 'approve' }); loadAdmin('payments'); }}>Approve waiver</button><button className="outline" onClick={async () => { const reason = prompt('Reason for declining waiver:') || 'Waiver request declined.'; await adminCall('POST', '/api/admin/payments/' + encodeURIComponent(p.reference) + '/action', { action: 'decline', reason }); loadAdmin('payments'); }}>Decline</button></>}</div></article>)}
                   </div>
                 ) : adminTab === 'reports' ? (
                   <div className="my-list">
@@ -1524,6 +1667,7 @@ function App() {
                           <small>
                             {u.email} · {u.role} · {u.location}
                           </small>
+                          {u.planExpiresAt && <small>Plan: {u.planType || 'Plan'} · Expires {new Date(u.planExpiresAt).toLocaleDateString('en-NG')}</small>}
                         </div>
                         <button
                           className="outline"
@@ -1606,11 +1750,15 @@ function App() {
               </p>
             )}
             {page === 'how' && (
-              <p>
-                Browse, message the seller on WhatsApp, meet in public, inspect
-                the item and arrange payment directly. Danzo does not collect
-                buyer payments.
-              </p>
+              <div className="how-content">
+                <p>Danzo helps people discover products and connect directly with sellers across Nigeria. Listings are reviewed before they appear in the marketplace.</p>
+                <article><b>1. Create your account</b><p>Sign up with your name, email and password. Choose whether you want to buy or sell. Sellers should add their active WhatsApp number and location so buyers can reach them.</p></article>
+                <article><b>2. Find a product</b><p>Browse the home page or use Search to explore categories, locations and prices. Open a listing to view its description, condition, price and photos. Read the details carefully and ask questions if anything is unclear.</p></article>
+                <article><b>3. Contact the seller</b><p>Use Message on WhatsApp, Send SMS or Call seller on the product page. These options connect you to the seller's main contact number. Confirm that the item is still available before making plans.</p></article>
+                <article><b>4. Meet and inspect</b><p>Arrange to meet in a safe public place. Check the product and test it where possible. Make sure it matches the listing before paying, then agree on the final price and payment method directly with the seller.</p></article>
+                <article><b>5. Start selling</b><p>Choose Sell, enter accurate product details and upload exactly two clear photos. Choose a monthly plan, six-month plan, one-listing payment or request a waiver. Paystack processes payments securely, then Danzo admins verify and approve the payment before your listing moves into review.</p></article>
+                <p className="how-note">Danzo helps buyers and sellers connect but does not collect buyer payments or process transactions between users. Always inspect an item before paying and never send advance payment to an unknown seller.</p>
+              </div>
             )}
             {page === 'safety' && (
               <ul>
@@ -1637,10 +1785,12 @@ function App() {
               </p>
             )}
             {page === 'contact' && (
-              <p>
-                Owner contact details can be added in the app configuration
-                before launch.
-              </p>
+              <div className="contact-card">
+                <p>Have a question, need help with your account, or want to report an issue? Contact the Danzo team using either option below.</p>
+                <a href="mailto:kevi.enterprises.co@gmail.com"><Mail size={19} /><span><b>Email</b><small>kevi.enterprises.co@gmail.com</small></span></a>
+                <a href="tel:08127005163"><Phone size={19} /><span><b>Call us</b><small>08127005163</small></span></a>
+                <p className="muted">For listing or account support, include the email address linked to your Danzo account and a short description of the issue.</p>
+              </div>
             )}
           </section>
         )}

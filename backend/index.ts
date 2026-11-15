@@ -7,7 +7,7 @@ import {
   secrets,
   notifications,
 } from '@appdeploy/sdk';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { DANZO_CONFIG as C } from '../danzo.config.ts';
@@ -29,11 +29,16 @@ async function getFirebaseAdminAuth() {
 async function requireFirebaseAuth(ctx: any) {
   const headers = ctx.event?.headers || {};
   const authorization = headers.authorization || headers.Authorization || '';
-  if (!authorization.startsWith('Bearer ')) {
+  const bodyToken = (ctx.body as any)?.__firebaseToken;
+  const queryToken = ctx.query?.__firebaseToken;
+  const token = authorization.startsWith('Bearer ')
+    ? authorization.slice(7)
+    : String(bodyToken || queryToken || '');
+  if (!token) {
     return fail('Sign in to continue.', 401);
   }
   try {
-    const decoded = await (await getFirebaseAdminAuth()).verifyIdToken(authorization.slice(7));
+    const decoded = await (await getFirebaseAdminAuth()).verifyIdToken(token);
     let userId = decoded.uid;
     const email = String(decoded.email || '').trim().toLowerCase();
     if (email) {
@@ -102,6 +107,79 @@ const phone = (v: string) => {
 };
 const validPhone = (v: string) => /^234[0-9]{10}$/.test(v);
 const sha = (v: string) => createHash('sha256').update(v).digest('hex');
+async function paystackSecret() {
+  const names = await secrets.listSecretNames();
+  if (!names.includes('PAYSTACK_SECRET_KEY')) throw new Error('Paystack secret key is not configured.');
+  if (!names.includes('PAYSTACK_PUBLIC_KEY')) throw new Error('Paystack public key is not configured.');
+  const [key, publicKey] = await Promise.all([
+    secrets.readSecret('PAYSTACK_SECRET_KEY'),
+    secrets.readSecret('PAYSTACK_PUBLIC_KEY'),
+  ]);
+  if (C.PAYSTACK_TEST_MODE && (!key.startsWith('sk_test_') || !publicKey.startsWith('pk_test_'))) {
+    throw new Error('Danzo is in test mode. Configure Paystack test keys beginning with pk_test_ and sk_test_.');
+  }
+  return key;
+}
+async function paystackRequest(path: string, init: any = {}) {
+  const response = await fetch('https://api.paystack.co' + path, {
+    ...init,
+    headers: { Authorization: 'Bearer ' + await paystackSecret(), 'Content-Type': 'application/json', ...(init.headers || {}) },
+  });
+  const data = await response.json();
+  if (!response.ok || !data.status) throw new Error(clean(data.message || 'Paystack request failed.', 250));
+  return data.data;
+}
+async function getPayment(reference: string) {
+  const [payment] = await db.get<any>('listing_payments', [reference], { consistent: true });
+  return payment;
+}
+async function verifyPaystackReference(reference: string) {
+  const payment = await getPayment(reference);
+  if (!payment) throw new Error('Payment reference not found.');
+  if (payment.paymentStatus === 'paid') return payment;
+  if (payment.planType === 'waiver') return payment;
+  const verified = await paystackRequest('/transaction/verify/' + encodeURIComponent(reference));
+  if (verified.reference !== reference || verified.status !== 'success' ||
+      Number(verified.amount) !== Number(payment.amountKobo) || verified.currency !== 'NGN') return payment;
+  const latest = await getPayment(reference);
+  if (!latest || latest.paymentStatus === 'paid') return latest || payment;
+  const next = { ...latest, paymentStatus: 'paid', paidAt: now(), paystackTransactionId: String(verified.id || '') };
+  await db.update('listing_payments', [{ id: reference, record: next }]);
+  return next;
+}
+async function paymentNotice(userId: string, title: string, body: string, kind: string, listingId: string) {
+  await db.tx.add('user_notifications', [{ id: uid(), userId, kind, productId: listingId, title, body, createdAt: now(), read: false }]);
+}
+async function approveListingPayment(payment: any) {
+  const [current] = await db.get<any>('listing_payments', [payment.id], { consistent: true });
+  if (!current || current.approvalStatus === 'approved') return current;
+  const t = now();
+  if (current.planType === 'month' || current.planType === 'sixmonth') {
+    const days = current.planType === 'month' ? C.MONTH_DAYS : C.SIXMONTH_DAYS;
+    const [owner] = await db.get<any>('users', [current.userId], { consistent: true });
+    if (!owner) throw new Error('Plan owner was not found.');
+    await db.update('users', [{ id: current.userId, record: { ...owner, planType: current.planType, planExpiresAt: t + days * 86400000, planApprovalStatus: 'approved', planApprovedAt: t } }]);
+    // A confirmed plan covers every listing draft that was held for this seller.
+    let nextToken: string | undefined;
+    do {
+      const products = await db.list<any>('products', { limit: 100, ...(nextToken ? { nextToken } : {}) });
+      for (const p of products.items.filter((x: any) => x.sellerId === current.userId && ['PendingPlan', 'Draft'].includes(x.status))) {
+        await db.update('products', [{ id: p.id, record: { ...p, status: 'Live', planPaymentId: current.id, rejectionReason: '' } }]);
+      }
+      nextToken = products.nextToken;
+    } while (nextToken);
+  } else if (current.listingId) {
+    const [product] = await db.get<any>('products', [current.listingId], { consistent: true });
+    if (product && product.sellerId === current.userId) {
+      await db.update('products', [{ id: product.id, record: { ...product, status: 'Live', rejectionReason: '', paymentApprovalId: current.id } }]);
+    }
+  }
+  const approved = { ...current, approvalStatus: 'approved', approvedBy: 'Admin', approvedAt: t, ...(current.planType === 'waiver' ? { paymentStatus: 'waiver_approved' } : {}) };
+  await db.update('listing_payments', [{ id: current.id, record: approved }]);
+  await paymentNotice(current.userId, current.planType === 'waiver' ? 'Waiver approved' : 'Payment approved', 'Your payment request was approved and your listing is now live.', 'payment_approved', current.listingId || '');
+  return approved;
+}
+
 const signed = async (paths: string[] = []) =>
   (await storage.url(paths.filter(Boolean).slice(0, 4))).map(x => x.url);
 async function profile(id: string) {
@@ -320,7 +398,7 @@ const adminRoutes = {
         db.list<any>('admin_notifications', { limit: 20 }),
       ]);
       const live = p.items.filter(
-        (x: any) => x.status === 'Live' && (!x.expiresAt || x.expiresAt > now())
+        (x: any) => x.status === 'Live'
       );
       return json({
         users: u.items.length,
@@ -340,11 +418,18 @@ const adminRoutes = {
       const r = await db.list<any>('products', { limit: 100 });
       return json({
         items: await Promise.all(
-          r.items.map(async (p: any) => ({
-            ...p,
-            images: await signed(p.imagePaths),
-            receiptUrl: p.receiptPath ? (await signed([p.receiptPath]))[0] : '',
-          }))
+          r.items.map(async (p: any) => {
+            const owner = await profile(p.sellerId);
+            return {
+              ...p,
+              sellerFullName: owner?.name || 'Unknown seller',
+              sellerEmail: owner?.email || '',
+              sellerPhone: owner?.phone || '',
+              sellerArea: owner?.area || '',
+              images: await signed(p.imagePaths),
+              receiptUrl: p.receiptPath ? (await signed([p.receiptPath]))[0] : '',
+            };
+          })
         ),
       });
     },
@@ -356,7 +441,7 @@ const adminRoutes = {
       if (!p) return fail('Listing not found.', 404);
       const b = obj(ctx.body);
       if (b.action === 'approve') {
-        await db.update('products', [{ id: ctx.params.id, record: { ...p, status: 'Live', approvedAt: now(), expiresAt: now() + C.LISTING_DURATION_DAYS * 86400000, rejectionReason: '' } }]);
+        await db.update('products', [{ id: ctx.params.id, record: { ...p, status: 'Live', approvedAt: now(), rejectionReason: '' } }]);
         await db.tx.add('user_notifications', [{ id: uid(), userId: p.sellerId, kind: 'listing_approved', productId: p.id, title: 'Your product has been verified', body: p.title + ' is approved and now visible on Danzo.', createdAt: now(), read: false }]);
         try {
           await notifications.send({ userIds: [p.sellerId], notification: { title: 'Your Danzo listing is verified', body: p.title + ' is approved and now live on Danzo.', url: '/' }, data: { kind: 'listing_approved', productId: p.id } });
@@ -486,6 +571,191 @@ const adminRoutes = {
   ],
 };
 export const handler = router({
+
+  'POST /api/listing-drafts': [
+    requireFirebaseAuth,
+    async (ctx: any) => {
+      const seller = await profile(ctx.user!.userId);
+      if (!seller || seller.role !== 'seller' || seller.suspended) return fail('A seller account is required.', 403);
+      if (!validPhone(seller.phone)) return fail('Add a WhatsApp number to your profile first.');
+      const b = obj(ctx.body), title = clean(b.title, 90), description = clean(b.description, 3000);
+      const price = Number(b.price), category = clean(b.category, 80), alternativePhone = phone(clean(b.alternativePhone, 30));
+      const images = Array.isArray(b.images) ? b.images.slice(0, 2) : [];
+      if (!validPhone(alternativePhone) || alternativePhone === seller.phone) return fail('Enter a valid alternative Nigerian phone number different from your profile WhatsApp number.');
+      if (!title || !description || !Number.isSafeInteger(price) || price <= 0 || !C.CATEGORIES.includes(category as any)) return fail('Check title, category, whole-naira price and description.');
+      if (images.length !== 2) return fail('Add exactly two product photos.');
+      const id = uid(), paths: string[] = [];
+      try {
+        for (let i = 0; i < images.length; i++) paths.push(await upload(images[i], 'products/' + id + '/' + i));
+        const payments = await db.list<any>('listing_payments', { limit: 100 });
+        const planPending = payments.items.some((p: any) => p.userId === ctx.user!.userId && ['month', 'sixmonth'].includes(p.planType) && p.approvalStatus === 'pending' && ['pending', 'paid'].includes(p.paymentStatus));
+        const active = seller.planApprovalStatus === 'approved' && Number(seller.planExpiresAt) > now();
+        const product = { id, sellerId: ctx.user!.userId, title, description, price, category, condition: C.CONDITIONS.includes(b.condition) ? b.condition : 'Used - Good', location: clean(b.location || seller.location, 120), alternativePhone, negotiable: !!b.negotiable, imagePaths: paths, receiptPath: '', status: active ? 'Pending' : planPending ? 'PendingPlan' : 'Draft', rejectionReason: '', createdAt: now(), views: 0, isDemo: false };
+        const [saved] = await db.tx.add('products', [product]);
+        if (!saved) throw new Error('Could not save product draft.');
+        if (active) return json({ listingId: id, submitted: true, planActiveUntil: seller.planExpiresAt, message: 'Your plan is active until ' + new Date(seller.planExpiresAt).toLocaleDateString('en-NG') + '. Listing submitted for approval.' });
+        if (planPending) return json({ listingId: id, planPending: true, message: 'Your plan payment is pending admin verification. This listing is held until the plan is approved.' });
+        return json({ listingId: id, needsPayment: true });
+      } catch (e) { await storage.delete(paths); throw e; }
+    },
+  ],
+  'POST /api/payments/initialize': [
+    requireFirebaseAuth,
+    async (ctx: any) => {
+      const b = obj(ctx.body), listingId = clean(b.listingId, 100), planType = clean(b.planType, 20);
+      const [product] = await db.get<any>('products', [listingId], { consistent: true });
+      if (!product || product.sellerId !== ctx.user!.userId || !['Draft'].includes(product.status)) return fail('Saved listing draft not found.', 404);
+      const owner = await profile(ctx.user!.userId);
+      if (owner?.planApprovalStatus === 'approved' && Number(owner.planExpiresAt) > now()) return fail('Your plan is already active until ' + new Date(owner.planExpiresAt).toLocaleDateString('en-NG') + '.');
+      const rows = await db.list<any>('listing_payments', { limit: 100 });
+      const pendingPlan = rows.items.find((p: any) => p.userId === ctx.user!.userId && ['month', 'sixmonth'].includes(p.planType) && ['pending', 'paid'].includes(p.paymentStatus) && p.approvalStatus === 'pending');
+      if (pendingPlan && ['month', 'sixmonth'].includes(planType)) return fail('Your plan payment is pending admin verification.');
+      const existing = rows.items.find((p: any) => p.userId === ctx.user!.userId && p.listingId === listingId && p.paymentStatus === 'pending');
+      if (existing?.authorizationUrl) return json({ authorizationUrl: existing.authorizationUrl, reference: existing.reference, reused: true });
+      let amount = 0;
+      if (planType === 'month') amount = C.MONTH_PRICE;
+      else if (planType === 'sixmonth') amount = C.SIXMONTH_PRICE;
+      else if (planType === 'listing') amount = Math.ceil(Number(product.price) * C.PER_LISTING_PERCENT / 100);
+      else return fail('Choose a valid payment option.');
+      if (!Number.isSafeInteger(amount) || amount <= 0) return fail('Invalid payment amount.');
+      const reference = 'DANZO_' + uid();
+      const record = { id: reference, reference, userId: ctx.user!.userId, userEmail: ctx.user!.email || owner?.email, planType, listingId, amount, amountKobo: amount * 100, currency: 'NGN', paymentStatus: 'pending', approvalStatus: 'pending', createdAt: now() };
+      const [saved] = await db.tx.add('listing_payments', [record]);
+      if (!saved) return fail('Could not create payment record.');
+      try {
+        const result = await paystackRequest('/transaction/initialize', { method: 'POST', body: JSON.stringify({ email: record.userEmail, amount: record.amountKobo, reference, currency: 'NGN', callback_url: C.PAYSTACK_CALLBACK_URL, metadata: { userId: record.userId, listingId, planType } }) });
+        await db.update('listing_payments', [{ id: reference, record: { ...record, authorizationUrl: result.authorization_url, accessCode: result.access_code } }]);
+        if (planType === 'month' || planType === 'sixmonth') {
+          await db.update('users', [{ id: ctx.user!.userId, record: { ...owner, planType, planApprovalStatus: 'pending', planPaymentReference: reference } }]);
+        }
+        return json({ authorizationUrl: result.authorization_url, reference });
+      } catch (e: any) {
+        await db.update('listing_payments', [{ id: reference, record: { ...record, paymentStatus: 'initialization_failed', failureReason: clean(e.message, 200) } }]);
+        return fail(e.message || 'Could not initialize Paystack.', 502);
+      }
+    },
+  ],
+  'POST /api/payments/waiver': [
+    requireFirebaseAuth,
+    async (ctx: any) => {
+      const listingId = clean(obj(ctx.body).listingId, 100);
+      const [product] = await db.get<any>('products', [listingId], { consistent: true });
+      if (!product || product.sellerId !== ctx.user!.userId || product.status !== 'Draft') return fail('Saved listing draft not found.', 404);
+      const reference = 'WAIVER_' + listingId;
+      const [old] = await db.get<any>('listing_payments', [reference], { consistent: true });
+      if (old) return json({ ok: true });
+      const record = { id: reference, reference, userId: ctx.user!.userId, userEmail: ctx.user!.email, planType: 'waiver', listingId, amount: 0, amountKobo: 0, currency: 'NGN', paymentStatus: 'waiver_requested', approvalStatus: 'pending', createdAt: now() };
+      await db.tx.add('listing_payments', [record]);
+      await db.update('products', [{ id: listingId, record: { ...product, status: 'WaiverPending' } }]);
+      return json({ ok: true });
+    },
+  ],
+  'GET /api/payments/mine': [
+    requireFirebaseAuth,
+    async (ctx: any) => {
+      const rows = await db.list<any>('listing_payments', { limit: 100 });
+      const mine = rows.items.filter((p: any) => p.userId === ctx.user!.userId);
+      for (const p of mine.filter((x: any) => x.paymentStatus === 'pending' && x.planType !== 'waiver')) {
+        try { await verifyPaystackReference(p.reference); } catch { /* user can manually retry */ }
+      }
+      const fresh = await db.list<any>('listing_payments', { limit: 100 });
+      return json({ items: fresh.items.filter((p: any) => p.userId === ctx.user!.userId).sort((a: any, b: any) => b.createdAt - a.createdAt) });
+    },
+  ],
+  'POST /api/payments/verify': [
+    requireFirebaseAuth,
+    async (ctx: any) => {
+      const reference = clean(obj(ctx.body).reference, 120), payment = await getPayment(reference);
+      if (!payment || payment.userId !== ctx.user!.userId) return fail('Payment not found.', 404);
+      const updated = await verifyPaystackReference(reference);
+      return json({ payment: updated, message: updated?.paymentStatus === 'paid' ? 'Payment received. Waiting for admin verification.' : 'Paystack has not confirmed this payment yet.' });
+    },
+  ],
+  'GET /api/paystack/callback': [
+    async (ctx: any) => {
+      const reference = clean(ctx.query.reference, 120);
+      if (!reference) return fail('Payment reference is missing.');
+      try { const p = await verifyPaystackReference(reference); return json({ ok: true, paymentStatus: p.paymentStatus, approvalStatus: p.approvalStatus }); }
+      catch (e: any) { return fail(clean(e.message, 200), 400); }
+    },
+  ],
+  'POST /api/paystack/webhook': [
+    async (ctx: any) => {
+      const headers = ctx.event?.headers || {}, signature = headers['x-paystack-signature'] || headers['X-Paystack-Signature'] || '';
+      const raw = ctx.event?.isBase64Encoded ? Buffer.from(ctx.event.body || '', 'base64') : Buffer.from(String(ctx.event?.body || ''));
+      if (!signature) return fail('Invalid webhook signature.', 401);
+      const expected = createHmac('sha512', await paystackSecret()).update(raw).digest('hex');
+      const a = Buffer.from(String(signature)), b = Buffer.from(expected);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) return fail('Invalid webhook signature.', 401);
+      const event = JSON.parse(raw.toString('utf8'));
+      if (event.event === 'charge.success' && event.data?.reference) {
+        const p = await getPayment(clean(event.data.reference, 120));
+        if (p && p.paymentStatus !== 'paid' && event.data.status === 'success' &&
+            Number(event.data.amount) === Number(p.amountKobo) && event.data.currency === 'NGN') {
+          const latest = await getPayment(p.reference);
+          if (latest && latest.paymentStatus !== 'paid') {
+            await db.update('listing_payments', [{ id: latest.id, record: {
+              ...latest, paymentStatus: 'paid', paidAt: now(),
+              paystackTransactionId: String(event.data.id || ''), webhookConfirmed: true,
+            } }]);
+          }
+        }
+      }
+      return json({ received: true });
+    },
+  ],
+  'GET /api/admin/payments': [
+    async (ctx: any) => {
+      if (!(await admin(ctx))) return fail('Admin session expired.', 401);
+      const rows = await db.list<any>('listing_payments', { limit: 100 });
+      const items = await Promise.all(rows.items.sort((a: any, b: any) => b.createdAt - a.createdAt).map(async (p: any) => {
+        const [owner, productRows] = await Promise.all([profile(p.userId), p.listingId ? db.get<any>('products', [p.listingId]) : Promise.resolve([null])]);
+        return { ...p, ownerName: owner?.name || 'Unknown user', ownerEmail: owner?.email || p.userEmail || '', productTitle: productRows[0]?.title || 'Listing unavailable' };
+      }));
+      return json({ items });
+    },
+  ],
+  'POST /api/admin/payments/:reference/recheck': [
+    async (ctx: any) => {
+      if (!(await admin(ctx))) return fail('Admin session expired.', 401);
+      try { return json({ payment: await verifyPaystackReference(clean(ctx.params.reference, 120)) }); }
+      catch (e: any) { return fail(clean(e.message, 200), 400); }
+    },
+  ],
+  'POST /api/admin/payments/:reference/action': [
+    async (ctx: any) => {
+      if (!(await admin(ctx))) return fail('Admin session expired.', 401);
+      const reference = clean(ctx.params.reference, 120), action = clean(obj(ctx.body).action, 20), payment = await getPayment(reference);
+      if (!payment) return fail('Payment record not found.', 404);
+      if (action === 'approve') {
+        if (payment.planType !== 'waiver' && payment.paymentStatus !== 'paid') return fail('Paystack has not verified this payment.');
+        if (payment.approvalStatus !== 'pending') return fail('This item has already been reviewed.');
+        await approveListingPayment(payment);
+        return json({ ok: true });
+      }
+      if (action === 'reject' || action === 'decline') {
+        const reason = clean(obj(ctx.body).reason, 300) || 'Please contact Danzo support for assistance.';
+        const next = { ...payment, paymentStatus: payment.planType === 'waiver' ? 'waiver_declined' : 'rejected', approvalStatus: 'rejected', rejectionReason: reason, rejectedBy: 'Admin', rejectedAt: now() };
+        await db.update('listing_payments', [{ id: reference, record: next }]);
+        if (payment.planType === 'month' || payment.planType === 'sixmonth') {
+          const [owner] = await db.get<any>('users', [payment.userId]);
+          if (owner) await db.update('users', [{ id: payment.userId, record: { ...owner, planApprovalStatus: 'rejected' } }]);
+          let nextToken: string | undefined;
+          do {
+            const rows = await db.list<any>('products', { limit: 100, ...(nextToken ? { nextToken } : {}) });
+            for (const p of rows.items.filter((x: any) => x.sellerId === payment.userId && x.status === 'PendingPlan')) await db.update('products', [{ id: p.id, record: { ...p, status: 'Draft', rejectionReason: reason } }]);
+            nextToken = rows.nextToken;
+          } while (nextToken);
+        } else if (payment.listingId) {
+          const [p] = await db.get<any>('products', [payment.listingId]);
+          if (p) await db.update('products', [{ id: p.id, record: { ...p, status: 'Draft', rejectionReason: reason } }]);
+        }
+        await paymentNotice(payment.userId, payment.planType === 'waiver' ? 'Waiver declined' : 'Payment rejected', reason + ' You can choose a payment option again from My Listings.', 'payment_rejected', payment.listingId || '');
+        return json({ ok: true });
+      }
+      return fail('Choose approve or reject.');
+    },
+  ],
   'GET /api/health': [async () => json({ ok: true })],
   'GET /api/config': [
     async () => {
@@ -515,7 +785,6 @@ export const handler = router({
       let items = r.items.filter(
         (p: any) =>
           p.status === 'Live' &&
-          (!p.expiresAt || p.expiresAt > now()) &&
           (!q || (p.title + ' ' + p.description).toLowerCase().includes(q)) &&
           (!cat || p.category === cat) &&
           (!loc || p.location === loc) &&
@@ -538,7 +807,7 @@ export const handler = router({
   'GET /api/products/:id': [
     async (ctx: any) => {
       const [p] = await db.get<any>('products', [ctx.params.id]);
-      if (!p || p.status !== 'Live' || (p.expiresAt && p.expiresAt < now()))
+      if (!p || p.status !== 'Live')
         return fail('Listing not found.', 404);
       await db.tx.update(
         'products',
@@ -554,7 +823,7 @@ export const handler = router({
       const [p] = await db.get<any>('products', [ctx.params.id]);
       if (!p || p.status !== 'Live') return fail('Listing not found.', 404);
       const s = await profile(p.sellerId),
-        contactPhone = p.alternativePhone || s?.phone;
+        contactPhone = s?.phone;
       if (!s || s.suspended || !validPhone(contactPhone))
         return fail('Seller contact is unavailable.', 404);
       return json({ phone: contactPhone });
@@ -585,6 +854,7 @@ export const handler = router({
           role,
           phone: role === 'seller' ? ph : '',
           location: clean(b.location, 120),
+          area: clean(b.area, 120),
           bio: clean(b.bio, 240),
           createdAt: old?.createdAt || now(),
           suspended: old?.suspended || false,
@@ -628,6 +898,7 @@ export const handler = router({
         name: clean(b.name, 80),
         phone: ph,
         location: clean(b.location, 120),
+        area: clean(b.area, 120),
         bio: clean(b.bio, 240),
       };
       await db.update('users', [{ id: ctx.user!.userId, record: next }]);
