@@ -1397,3 +1397,18 @@ footer nav button:hover { color: #08784d; }
   .pinfo { padding: 10px; gap: 6px; }
   .pinfo b { font-size: 11px; }
 }
+
+
+/* Seller listing editor and admin review previews */
+.edit-dialog { max-height: 88vh; overflow-y: auto; }
+.edit-dialog h2 { margin: 8px 0 18px; }
+.edit-dialog label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-size: 12px; font-weight: 700; }
+.edit-dialog input, .edit-dialog select, .edit-dialog textarea { width: 100%; box-sizing: border-box; border: 1px solid #dce4de; border-radius: 9px; padding: 11px; font: inherit; background: #fff; }
+.edit-dialog .edit-check { flex-direction: row; align-items: center; }
+.edit-dialog .edit-check input { width: auto; }
+.admin-product-photos { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+.admin-product-photos img { width: 112px; height: 92px; object-fit: cover; border-radius: 9px; border: 1px solid #e1e6e2; }
+@media (max-width: 620px) {
+  .edit-dialog { width: min(94vw, 520px); padding: 20px; }
+  .admin-product-photos img { width: 88px; height: 76px; }
+}
