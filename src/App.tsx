@@ -132,6 +132,9 @@ function App() {
     [saved, setSaved] = useState<any[]>([]),
     [notificationItems, setNotificationItems] = useState<any[]>([]),
     [selected, setSelected] = useState<Product | null>(null),
+    [editingProduct, setEditingProduct] = useState<any>(null),
+    [editForm, setEditForm] = useState<any>({}),
+    [savingEdit, setSavingEdit] = useState(false),
     [query, setQuery] = useState(''),
     [cat, setCat] = useState(''),
     [loc, setLoc] = useState(''),
@@ -614,6 +617,37 @@ function App() {
       loadAdmin('products');
     } catch (e: any) {
       notify(e.message);
+    }
+  };
+  const startEdit = (p: any) => {
+    setEditForm({
+      title: p.title || '',
+      price: String(p.price ?? ''),
+      category: p.category || cfg.categories?.[0] || '',
+      condition: p.condition || cfg.conditions?.[0] || '',
+      location: p.location || '',
+      description: p.description || '',
+      alternativePhone: p.alternativePhone || '',
+      negotiable: !!p.negotiable,
+    });
+    setEditingProduct(p);
+  };
+  const saveListingEdit = async () => {
+    if (!editingProduct) return;
+    setSavingEdit(true);
+    try {
+      await call('PUT', '/api/products/' + editingProduct.id, {
+        ...editForm,
+        price: Number(editForm.price),
+      });
+      notify('Your listing details have been updated.');
+      setEditingProduct(null);
+      await privateLoad();
+      await load();
+    } catch (e: any) {
+      notify(e.message);
+    } finally {
+      setSavingEdit(false);
     }
   };
   const pick = async (e: any, field: string) => {
@@ -1300,6 +1334,10 @@ function App() {
                   </div>
                   <div>
                     {p.status === 'Live' && (
+                      <>
+                      <button className="outline" onClick={() => startEdit(p)}>
+                        Edit details
+                      </button>
                       <button
                         className="outline"
                         onClick={async () => {
@@ -1309,6 +1347,7 @@ function App() {
                       >
                         Mark sold
                       </button>
+                      </>
                     )}
                     <button
                       className="outline"
@@ -1560,11 +1599,17 @@ function App() {
                     {(adminData.items || []).map((p: any) => (
                       <article className="my-item">
                         <div>
+                          <div className="admin-product-photos">
+                            {(p.images || []).map((src: string, i: number) => <a href={src} target="_blank" rel="noreferrer" key={src}><img src={src} alt={p.title + ' photo ' + (i + 1)} loading="lazy" /></a>)}
+                          </div>
                           <b>
                             {p.isDemo ? 'DEMO · ' : ''}
                             {p.title}
                           </b>
                           <small>{money(p.price)} · {p.location} · {p.status}</small>
+                          <small><b>Description:</b> {p.description || 'No description provided.'}</small>
+                          <small><b>Category:</b> {p.category || 'Not specified'} · <b>Condition:</b> {p.condition || 'Not specified'}</small>
+                          <small><b>Negotiable:</b> {p.negotiable ? 'Yes' : 'No'} · <b>Alternative phone:</b> {p.alternativePhone || 'Not provided'}</small>
                           <small><b>Product owner:</b> {p.sellerFullName || 'Unknown seller'}</small>
                           <small><b>Owner email:</b> {p.sellerEmail || 'Not provided'}</small>
                           <small><b>Owner phone:</b> {p.sellerPhone || 'Not provided'}</small>
@@ -1834,6 +1879,24 @@ function App() {
             Profile
           </button>
         </nav>
+      )}
+      {editingProduct && (
+        <div className="shade" onClick={() => !savingEdit && setEditingProduct(null)}>
+          <div className="dialog edit-dialog" onClick={e => e.stopPropagation()}>
+            <button className="close" onClick={() => setEditingProduct(null)} disabled={savingEdit}><X /></button>
+            <small>EDIT APPROVED LISTING</small>
+            <h2>Update product details</h2>
+            <label>Product title<input maxLength={90} value={editForm.title || ''} onChange={e => setEditForm({...editForm, title:e.target.value})} /></label>
+            <label>Price (₦)<input type="number" min="1" value={editForm.price || ''} onChange={e => setEditForm({...editForm, price:e.target.value})} /></label>
+            <label>Category<select value={editForm.category || ''} onChange={e => setEditForm({...editForm, category:e.target.value})}>{(cfg.categories || []).map((x:string)=><option key={x} value={x}>{x}</option>)}</select></label>
+            <label>Condition<select value={editForm.condition || ''} onChange={e => setEditForm({...editForm, condition:e.target.value})}>{(cfg.conditions || []).map((x:string)=><option key={x} value={x}>{x}</option>)}</select></label>
+            <label>Area / location<input maxLength={120} value={editForm.location || ''} onChange={e => setEditForm({...editForm, location:e.target.value})} /></label>
+            <label>Product description<textarea maxLength={3000} rows={5} value={editForm.description || ''} onChange={e => setEditForm({...editForm, description:e.target.value})} /></label>
+            <label>Alternative phone number<input value={editForm.alternativePhone || ''} onChange={e => setEditForm({...editForm, alternativePhone:e.target.value})} /></label>
+            <label className="edit-check"><input type="checkbox" checked={!!editForm.negotiable} onChange={e => setEditForm({...editForm, negotiable:e.target.checked})} /> Price is negotiable</label>
+            <button className="primary full" disabled={savingEdit || !editForm.title?.trim() || !Number(editForm.price) || !editForm.description?.trim()} onClick={saveListingEdit}>{savingEdit ? 'Saving changes…' : 'Save changes'}</button>
+          </div>
+        </div>
       )}
       {modal && (
         <div className="shade">
