@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '@appdeploy/client';
+import { api } from './lib/api';
 import { firebaseAuth } from './firebase';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, onAuthStateChanged, sendPasswordResetEmail, signInWithEmailAndPassword, signInWithPopup, signOut as firebaseSignOut } from 'firebase/auth';
 import {
@@ -90,17 +90,15 @@ const compress = (f: File) =>
   });
 const call = async (m: string, p: string, d?: any) => {
   try {
-    const token = await firebaseAuth.currentUser?.getIdToken();
-    const payload = token ? { ...(d || {}), __firebaseToken: token } : d;
     let response: { data: any };
     if (m === 'GET') {
-      response = await api.get(p, { params: token ? { __firebaseToken: token } : d });
+      response = await api.get(p);
     } else if (m === 'POST') {
-      response = await api.post(p, payload);
+      response = await api.post(p, d);
     } else if (m === 'PUT') {
-      response = await api.put(p, payload);
+      response = await api.put(p, d);
     } else {
-      response = await api.delete(p, token ? { __firebaseToken: token } : d);
+      response = await api.delete(p, d);
     }
     return response.data;
   } catch (e: any) {
