@@ -28,9 +28,12 @@ class ApiRequestError extends Error {
 // AppDeploy's API gateway is the default so builds without VITE_API_BASE_URL
 // continue to reach the existing AppDeploy backend.
 const DEFAULT_API_BASE_URL = 'https://api-v2.appdeploy.ai/app/danzo-h68jin';
-const API_BASE_URL = (
+const configuredApiBaseUrl = (
   import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL
-).trim().replace(/\\/+$/, '');
+).trim();
+const API_BASE_URL = configuredApiBaseUrl.endsWith('/')
+  ? configuredApiBaseUrl.replace(/\/$/, '')
+  : configuredApiBaseUrl;
 
 function appendParams(path: string, params?: Record<string, unknown>) {
   if (!params) return path;
