@@ -88,15 +88,18 @@
       "approve and reject audit fields",
       "user plan expiry in dashboard",
       "legacy receipt and payment records retained",
-      "manual bank transfer screens hidden"
+      "manual bank transfer screens hidden",
+      "admin can preview listing photos and full product details before approval",
+      "seller can edit all details of an approved listing from My Listings"
     ],
-    "description": "Verifies admins can review and audit new payment records without deleting historical receipt records or changing existing dashboard styling.",
+    "description": "Verifies admins can inspect listing photos and full details before approval, sellers can edit their approved listings, and payment records remain intact.",
     "steps": [
-      "Open Admin and select Payments",
-      "Re-check a paid test transaction and approve it",
-      "Review the user's plan and expiry in Users",
-      "Confirm old payment records remain in storage while the seller listing form no longer requests a receipt"
+      "Sign in as a seller, open My Listings, and edit the details of an approved listing",
+      "Save the changes, reload My Listings, and confirm the updated details remain",
+      "Open Admin and select Products",
+      "Inspect the submitted product photos, description, category, condition, price and seller details before approving it",
+      "Review a payment record and confirm historical records remain stored"
     ],
-    "expected": "The payment queue shows user, product, type, amount, status, reference and date; approval metadata is saved, user plan details appear, and legacy data is not deleted."
+    "expected": "The seller's approved listing changes persist and are visible in the marketplace; the admin product queue displays the submitted photos and full product details before approval; and payment approval metadata is saved without deleting legacy records."
   }
 ]
