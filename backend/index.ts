@@ -1079,12 +1079,17 @@ export const handler = router({
           description: clean(b.description ?? p.description, 3000),
           price: Number(b.price ?? p.price),
           category: clean(b.category ?? p.category, 80),
+          condition: clean(b.condition ?? p.condition, 80),
           location: clean(b.location ?? p.location, 120),
+          alternativePhone: phone(clean(b.alternativePhone ?? p.alternativePhone ?? '', 30)),
           negotiable:
             b.negotiable === undefined ? p.negotiable : !!b.negotiable,
         };
-      if (!next.title || !Number.isFinite(next.price) || next.price <= 0)
-        return fail('Enter a valid title and price.');
+      if (!next.title || !next.description || !Number.isFinite(next.price) || next.price <= 0 ||
+          !C.CATEGORIES.includes(next.category as any) || !C.CONDITIONS.includes(next.condition as any))
+        return fail('Check the product title, description, price, category and condition.');
+      if (!validPhone(next.alternativePhone) || next.alternativePhone === (await profile(ctx.user!.userId))?.phone)
+        return fail('Enter a valid alternative Nigerian phone number different from your WhatsApp number.');
       await db.update('products', [{ id: ctx.params.id, record: next }]);
       return json({ ok: true });
     },
