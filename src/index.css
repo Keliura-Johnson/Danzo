@@ -1458,3 +1458,58 @@ footer nav button:hover { color: #08784d; }
   .edit-dialog { width: min(94vw, 520px); padding: 20px; }
   .admin-product-photos img { width: 88px; height: 76px; }
 }
+
+/* Final product-card layout isolation: keep each image above its own details. */
+.grid > .product {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 170px auto;
+  align-content: start;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+}
+.grid > .product > .photo {
+  position: relative;
+  display: block;
+  grid-row: 1;
+  width: 100%;
+  height: 170px;
+  min-height: 170px;
+  max-height: 170px;
+  overflow: hidden;
+  contain: layout paint;
+}
+.grid > .product > .photo > img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: cover;
+}
+.grid > .product > .pinfo {
+  grid-row: 2;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: auto;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 620px) {
+  .grid > .product {
+    grid-template-rows: 138px auto;
+  }
+  .grid > .product > .photo {
+    height: 138px;
+    min-height: 138px;
+    max-height: 138px;
+  }
+}
