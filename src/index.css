@@ -1513,3 +1513,11 @@ footer nav button:hover { color: #08784d; }
     max-height: 138px;
   }
 }
+
+/* Best-effort Netlify badge visibility workaround.
+   Targets only Netlify's injected badge iframe; no app UI or navigation elements. */
+#nl-badge-frame {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
