@@ -1379,8 +1379,14 @@ function App() {
                       className="outline"
                       onClick={async () => {
                         if (confirm('Delete listing?')) {
-                          await call('DELETE', '/api/products/' + p.id);
-                          privateLoad();
+                          try {
+                            await call('DELETE', '/api/products/' + p.id);
+                            await privateLoad();
+                            await load();
+                            notify('Listing deleted successfully.');
+                          } catch (e: any) {
+                            notify(e.message || 'Could not delete this listing. Please try again.');
+                          }
                         }
                       }}
                     >
