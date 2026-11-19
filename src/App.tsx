@@ -129,6 +129,9 @@ function App() {
     [payments, setPayments] = useState<any[]>([]),
     [paymentDraftId, setPaymentDraftId] = useState(''),
     [paymentDraftAmount, setPaymentDraftAmount] = useState(0),
+    [editingDraftId, setEditingDraftId] = useState(''),
+    [resumePaymentUrl, setResumePaymentUrl] = useState(''),
+    [contactChoice, setContactChoice] = useState<any>(null),
     [saved, setSaved] = useState<any[]>([]),
     [notificationItems, setNotificationItems] = useState<any[]>([]),
     [selected, setSelected] = useState<Product | null>(null),
@@ -462,33 +465,43 @@ function App() {
     }
   };
   const contact = async (method: 'whatsapp' | 'sms' | 'call' = 'whatsapp') => {
-    if (!user) {
-      nav('login');
-      return;
-    }
+    if (!user) { nav('login'); return; }
     try {
       const d = await call('GET', '/api/products/' + selected?.id + '/contact');
-      const number = phone(d.phone);
-      if (method === 'call') {
-        window.location.href = 'tel:+' + number;
-      } else if (method === 'sms') {
-        window.location.href = 'sms:+' + number;
-      } else {
-        const msg =
-          'Hello, I saw "' +
-          selected?.title +
-          '" (' +
-          money(selected?.price || 0) +
-          ') on Danzo. Is it still available?';
-        window.open(
-          'https://wa.me/' + number + '?text=' + encodeURIComponent(msg),
-          '_blank',
-          'noopener,noreferrer'
-        );
-      }
-    } catch (e: any) {
-      notify(e.message);
+      setContactChoice({ method, phone: d.phone, alternativePhone: d.alternativePhone || '' });
+    } catch (e: any) { notify(e.message); }
+  };
+  const performContact = (rawNumber: string) => {
+    if (!contactChoice || !rawNumber) return;
+    const number = phone(rawNumber), method = contactChoice.method;
+    setContactChoice(null);
+    if (method === 'call') window.location.href = 'tel:+' + number;
+    else if (method === 'sms') window.location.href = 'sms:+' + number;
+    else {
+      const msg = 'Hello, I saw "' + selected?.title + '" (' + money(selected?.price || 0) + ') on Danzo. Is it still available?';
+      window.open('https://wa.me/' + number + '?text=' + encodeURIComponent(msg), '_blank', 'noopener,noreferrer');
     }
+  };
+  const resumeDraft = (p: any) => {
+    const pendingPayment = payments.find((x: any) => x.listingId === p.id && x.paymentStatus === 'pending' && x.planType !== 'waiver');
+    setListing({
+      title: p.title || '',
+      category: p.category || cfg.categories?.[0] || 'Phones & Tablets',
+      condition: p.condition || cfg.conditions?.[0] || 'Used - Good',
+      price: String(p.price ?? ''),
+      description: p.description || '',
+      location: p.location || profile?.location || 'Yola',
+      alternativePhone: p.alternativePhone || '',
+      negotiable: !!p.negotiable,
+      images: Array.isArray(p.images) ? p.images : [],
+      receipt: null,
+    });
+    setEditingDraftId(p.id);
+    setPaymentDraftId(p.id);
+    setPaymentDraftAmount(Math.ceil(Number(p.price) * DANZO_CONFIG.PER_LISTING_PERCENT / 100));
+    setResumePaymentUrl(pendingPayment?.authorizationUrl || '');
+    nav('sell');
+    window.scrollTo(0, 0);
   };
   const save = async (p: Product) => {
     if (!user) {
@@ -507,17 +520,28 @@ function App() {
   const submit = async () => {
     setLoading(true);
     try {
-      const imgs = await Promise.all(listing.images.map(compress));
-      const result = await call('POST', '/api/listing-drafts', { ...listing, price: Number(listing.price), images: imgs });
-      if (result.needsPayment) {
-        setPaymentDraftId(result.listingId);
+      if (editingDraftId) {
+        await call('PUT', '/api/listing-drafts/' + editingDraftId, { ...listing, price: Number(listing.price) });
+        setPaymentDraftId(editingDraftId);
         setPaymentDraftAmount(Math.ceil(Number(listing.price) * DANZO_CONFIG.PER_LISTING_PERCENT / 100));
-        notify('Your product draft is saved. Choose a payment option.');
+        notify('Draft details saved. Continue to payment below.');
       } else {
-        notify(result.message || 'Listing submitted for approval.');
-        setListing({ title: '', category: 'Phones & Tablets', condition: 'Used - Good', price: '', description: '', location: profile?.location || 'Yola', alternativePhone: '', negotiable: false, images: [], receipt: null });
-        nav('my');
-        await privateLoad();
+        const imgs = await Promise.all(listing.images.map((f: any) => typeof f === 'string' ? Promise.resolve(f) : compress(f)));
+        const result = await call('POST', '/api/listing-drafts', { ...listing, price: Number(listing.price), images: imgs });
+        if (result.needsPayment) {
+          setEditingDraftId(result.listingId);
+          setPaymentDraftId(result.listingId);
+          setPaymentDraftAmount(Math.ceil(Number(listing.price) * DANZO_CONFIG.PER_LISTING_PERCENT / 100));
+          notify('Your product draft is saved. Choose a payment option.');
+        } else {
+          notify(result.message || 'Listing submitted for approval.');
+          setListing({ title: '', category: 'Phones & Tablets', condition: 'Used - Good', price: '', description: '', location: profile?.location || 'Yola', alternativePhone: '', negotiable: false, images: [], receipt: null });
+          setEditingDraftId('');
+          setPaymentDraftId('');
+          setResumePaymentUrl('');
+          nav('my');
+          await privateLoad();
+        }
       }
     } catch (e: any) { notify(e.message); }
     finally { setLoading(false); }
@@ -596,9 +620,6 @@ function App() {
     }
   };
   const adminCall = async (m: string, p: string, d?: any) => call(m, p + (p.includes('?') ? '&' : '?') + 'adminToken=' + encodeURIComponent(adminToken), d);
-  const enableSellerAlerts = async () => {
-    notify('Push notifications are temporarily unavailable while Danzo moves to Firebase sign-in.');
-  };
   const enableAdminAlerts = async () => {
     notify('Admin push notifications are temporarily unavailable during the Firebase sign-in migration.');
   };
@@ -737,7 +758,6 @@ function App() {
         <nav className="desktop-nav" aria-label="Main navigation">
           <button className={page === 'home' ? 'active' : ''} onClick={() => nav('home')}><Home size={17} /> Home</button>
           <button className={page === 'search' ? 'active' : ''} onClick={() => nav('search')}><Search size={17} /> Search</button>
-          {profile?.role === 'seller' && <button className={page === 'sell' ? 'active' : ''} onClick={() => nav('sell')}><Plus size={17} /> Sell</button>}
           <button className={page === 'saved' ? 'active' : ''} onClick={() => nav('saved')}><Bookmark size={17} /> Saved</button>
           <button className={page === 'profile' ? 'active' : ''} onClick={() => nav('profile')}><User size={17} /> Profile</button>
         </nav>
@@ -1249,7 +1269,7 @@ function App() {
                   />{' '}
                   Negotiable
                 </label>
-                <div className="photo-upload-options">
+                {!editingDraftId && <div className="photo-upload-options">
                   <label className="upload-choice">
                     <span>Choose from files or gallery</span>
                     <input className="file-picker-hidden" type="file" accept="image/*" multiple onChange={e => pick(e, 'images')} />
@@ -1259,11 +1279,12 @@ function App() {
                     <input className="file-picker-hidden" type="file" accept="image/*" capture="environment" onChange={e => pick(e, 'images')} />
                   </label>
                   <small>{listing.images.length} of 2 photos selected. {listing.images.length === 2 ? 'Both photos are ready.' : 'Select or take the remaining photo(s).'} Maximum 5MB per photo.</small>
-                </div>
+                </div>}
+                {editingDraftId && <p className="notice">Your two saved product photos will be kept with this draft.</p>}
                 <div className="thumbs">
-                  {listing.images.map((f: File, i: number) => (
+                  {listing.images.map((f: any, i: number) => (
                     <span>
-                      {f.name}
+                      {typeof f === 'string' ? 'Saved photo ' + (i + 1) : f.name}
                       <button
                         onClick={() =>
                           setListing({
@@ -1285,11 +1306,12 @@ function App() {
                   <small>CHOOSE YOUR LISTING PAYMENT</small>
                   <h2>Your product draft is saved</h2>
                   <p>Choose one option. Payments are processed securely by Paystack.</p>
+                  {resumePaymentUrl && <button className="primary full" disabled={loading} onClick={() => window.location.assign(resumePaymentUrl)}>Continue existing payment</button>}
                   <button className="outline full" disabled={loading} onClick={() => startListingPayment('month')}>Pay for 1 month: ₦{Number(DANZO_CONFIG.MONTH_PRICE).toLocaleString('en-NG')} · Unlimited listings for 31 days</button>
                   <button className="outline full" disabled={loading} onClick={() => startListingPayment('sixmonth')}>Pay for 6 months: ₦{Number(DANZO_CONFIG.SIXMONTH_PRICE).toLocaleString('en-NG')} · Unlimited listings for 183 days</button>
                   <button className="outline full" disabled={loading} onClick={() => startListingPayment('listing')}>Pay for just this listing: ₦{(paymentDraftAmount || Math.ceil(Number(listing.price) * DANZO_CONFIG.PER_LISTING_PERCENT / 100)).toLocaleString('en-NG')}</button>
                   <button className="outline full" disabled={loading} onClick={requestListingWaiver}>Request a waiver</button>
-                  <button className="link" onClick={() => setPaymentDraftId('')}>Cancel and keep draft</button>
+                  <button className="link" onClick={() => { setPaymentDraftId(''); setResumePaymentUrl(''); nav('my'); }}>Cancel and keep draft</button>
                 </div>}
                 <p className="muted">
                   Buyers will contact you on {profile.phone}.
@@ -1317,8 +1339,6 @@ function App() {
             <small>SELLER SPACE</small>
             <h1>My listings</h1>
             {payments.map((payment: any) => <article className="my-item payment-record" key={payment.reference}><div><b>{payment.planType === 'month' ? '1-month plan' : payment.planType === 'sixmonth' ? '6-month plan' : payment.planType === 'waiver' ? 'Waiver request' : 'Single listing fee'}</b><small>{payment.paymentStatus === 'paid' ? 'Payment received. Waiting for admin verification.' : payment.paymentStatus === 'pending' ? 'Payment pending' : payment.paymentStatus === 'waiver_requested' ? 'Waiver request pending' : payment.paymentStatus === 'rejected' || payment.paymentStatus === 'waiver_declined' ? 'Rejected: ' + (payment.rejectionReason || 'Please contact Danzo.') : payment.paymentStatus}</small><small>{payment.reference} · {payment.amount ? money(payment.amount) : 'No payment'}</small></div><div>{payment.paymentStatus === 'pending' && <><button className="outline" onClick={() => payment.authorizationUrl && window.location.assign(payment.authorizationUrl)}>Continue payment</button><button className="outline" onClick={() => verifyMyPayment(payment.reference)}>I've paid, check now</button></>}{(payment.paymentStatus === 'rejected' || payment.paymentStatus === 'waiver_declined') && <button className="outline" onClick={() => { setPaymentDraftId(payment.listingId); setPaymentDraftAmount(Number(payment.amount) || 0); nav('sell'); }}>Choose payment options again</button>}</div></article>)}
-            <div className="notification-tools"><div><b>Listing notifications</b><small>Get an alert when your product is approved or needs changes.</small></div><button className="outline" onClick={enableSellerAlerts}>Enable alerts</button></div>
-            {notificationItems.length > 0 && <div className="seller-notifications"><b>Recent updates</b>{notificationItems.map((n: any) => <div className="seller-notice" key={n.id}><strong>{n.title}</strong><small>{n.body}</small></div>)}</div>}
             <div className="my-list">
               {mine.map(p => (
                 <article className="my-item">
@@ -1333,6 +1353,12 @@ function App() {
                     )}
                   </div>
                   <div>
+                    {p.status === 'Draft' && (() => {
+                      const payment = payments.find((x: any) => x.listingId === p.id && x.planType !== 'waiver' && ['pending', 'paid'].includes(x.paymentStatus));
+                      return payment?.paymentStatus === 'paid'
+                        ? <button className="outline" disabled>Payment received · Awaiting admin approval</button>
+                        : <button className="outline" onClick={() => resumeDraft(p)}>{payment?.paymentStatus === 'pending' ? 'Resume payment' : 'Resume draft'}</button>;
+                    })()}
                     {p.status === 'Live' && (
                       <>
                       <button className="outline" onClick={() => startEdit(p)}>
@@ -1797,7 +1823,7 @@ function App() {
                 <p>Danzo helps people discover products and connect directly with sellers across Nigeria. Listings are reviewed before they appear in the marketplace.</p>
                 <article><b>1. Create your account</b><p>Sign up with your name, email and password. Choose whether you want to buy or sell. Sellers should add their active WhatsApp number and location so buyers can reach them.</p></article>
                 <article><b>2. Find a product</b><p>Browse the home page or use Search to explore categories, locations and prices. Open a listing to view its description, condition, price and photos. Read the details carefully and ask questions if anything is unclear.</p></article>
-                <article><b>3. Contact the seller</b><p>Use Message on WhatsApp, Send SMS or Call seller on the product page. These options connect you to the seller's main contact number. Confirm that the item is still available before making plans.</p></article>
+                <article><b>3. Contact the seller</b><p>Use Message on WhatsApp, Send SMS or Call seller on the product page. Choose which of the seller's available numbers to use for WhatsApp, SMS or a call. Confirm that the item is still available before making plans.</p></article>
                 <article><b>4. Meet and inspect</b><p>Arrange to meet in a safe public place. Check the product and test it where possible. Make sure it matches the listing before paying, then agree on the final price and payment method directly with the seller.</p></article>
                 <article><b>5. Start selling</b><p>Choose Sell, enter accurate product details and upload exactly two clear photos. Choose a monthly plan, six-month plan, one-listing payment or request a waiver. Paystack processes payments securely, then Danzo admins verify and approve the payment before your listing moves into review.</p></article>
                 <p className="how-note">Danzo helps buyers and sellers connect but does not collect buyer payments or process transactions between users. Always inspect an item before paying and never send advance payment to an unknown seller.</p>
@@ -1895,6 +1921,19 @@ function App() {
             <label>Alternative phone number<input value={editForm.alternativePhone || ''} onChange={e => setEditForm({...editForm, alternativePhone:e.target.value})} /></label>
             <label className="edit-check"><input type="checkbox" checked={!!editForm.negotiable} onChange={e => setEditForm({...editForm, negotiable:e.target.checked})} /> Price is negotiable</label>
             <button className="primary full" disabled={savingEdit || !editForm.title?.trim() || !Number(editForm.price) || !editForm.description?.trim()} onClick={saveListingEdit}>{savingEdit ? 'Saving changes…' : 'Save changes'}</button>
+          </div>
+        </div>
+      )}
+      {contactChoice && (
+        <div className="shade" onClick={() => setContactChoice(null)}>
+          <div className="dialog" onClick={e => e.stopPropagation()}>
+            <button className="close" onClick={() => setContactChoice(null)}><X /></button>
+            <small>CHOOSE SELLER NUMBER</small>
+            <h2>Which number should we use?</h2>
+            <p>Choose the seller's number for {contactChoice.method === 'whatsapp' ? 'WhatsApp' : contactChoice.method === 'sms' ? 'SMS' : 'a phone call'}.</p>
+            <button className="outline full" onClick={() => performContact(contactChoice.phone)}>WhatsApp number · {contactChoice.phone}</button>
+            {contactChoice.alternativePhone && contactChoice.alternativePhone !== contactChoice.phone && <button className="outline full" onClick={() => performContact(contactChoice.alternativePhone)}>Alternative number · {contactChoice.alternativePhone}</button>}
+            <button className="link" onClick={() => setContactChoice(null)}>Cancel</button>
           </div>
         </div>
       )}
