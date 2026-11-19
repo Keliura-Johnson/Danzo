@@ -76,7 +76,19 @@ async function request<T = any>(
     init.body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (networkError) {
+    // If a Netlify environment variable points to an obsolete API host,
+    // retry against Danzo's confirmed AppDeploy backend.
+    if (API_BASE_URL === DEFAULT_API_BASE_URL) throw networkError;
+    const fallbackUrl = DEFAULT_API_BASE_URL + appendParams(
+      path.startsWith('/') ? path : '/' + path,
+      config?.params
+    );
+    response = await fetch(fallbackUrl, init);
+  }
   const raw = await response.text();
   let data: any = undefined;
   if (raw) {
